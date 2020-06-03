@@ -101,14 +101,14 @@ def makeRewardGrid(row_traj_list,row_reward_list,row_alt,column_traj_list,column
     return reward_grid
 
 
-def updateAltruism(row_traj_list,row_reward_list,column_traj_list,column_reward_list,column_alt,dt,safety_params,row_alt_prior,row_traj_prior,alt_stepsize):
+def updateAltruism(row_traj_list,row_reward_list,column_traj_list,column_reward_list,column_alt,dt,safety_params,row_traj_prior,alt_stepsize):
     #NOTE: For the time being we presume to only be estimating the altruism of the row player
-    new_row_alt_prior = []
+    row_alt_prior = []
     normalising_total = 0
-    for i in range(1/alt_stepsize):
-        row_alt = alt_stepsize*i
+    #arange(a,b,c) gives a+i*c<b. So to include 1 into distribution an extra step must be added
+    for row_alt in np.arange(0,1+alt_stepsize,alt_stepsize):
 
-        reward_grid = makeRewardGrid(row_traj_list,row_reward_list,row_alt,column_traj_list,column_reward_list_column_alt,dt,safety_params)
+        reward_grid = makeRewardGrid(row_traj_list,row_reward_list,row_alt,column_traj_list,column_reward_list,column_alt,dt,safety_params)
 
         #Stackelberg Game, assumes Other/Non-Ego/In-Lane/Row agent is initial decider
         #max_row_r,max_column_r = None,None
@@ -123,16 +123,14 @@ def updateAltruism(row_traj_list,row_reward_list,column_traj_list,column_reward_
                 max_row_r = max(reward_grid[j,:,0])
                 #max_column_r = max(reward_grid[j,:,1])
 
-        likelihood_tot = 0
-        prob_alpha_given_traj = []
-        for j in range(reward_grid.shape[0]):
-            likelihood_tot += abs(max(reward_grid[j,:,0])-max_row_r)*row_traj_prior[j]
-        normalising_total += likelihood_tot*row_alt_prior[i]
-        new_row_alt_prior.append(likelihood_tot*row_alt_prior[i])
+        #NOTE: Arbitrary Constant being used here
+        likelihood_tot = sum([math.exp(-4*abs(max(reward_grid[j,:,0])-max_row_r))*row_traj_prior[j] for j in range(reward_grid.shape[0])])
+        normalising_total += likelihood_tot
+        row_alt_prior.append(likelihood_tot)
 
-    new_row_alt_prior = [x/normalising_total for x in new_row_alt_prior]
+    row_alt_prior = [x/normalising_total for x in row_alt_prior]
 
-    return new_row_alt_prior
+    return row_alt_prior
 
 #####################################################################################################
 #####################################################################################################
@@ -266,7 +264,7 @@ if __name__ == "__main__":
     #Define Vehicles
     debug = False
     T = 10
-    dt = .1
+    dt = .2
 
     ego = Car(controller=None,is_ego=True,debug=debug,label="Ego",timestep=dt)
     other = Car(controller=None,is_ego=False,debug=debug,label="Other",timestep=dt)
@@ -330,11 +328,11 @@ if __name__ == "__main__":
     ###################################
     #Initialise Altruism Ground Truth Values and Distribution
     alt_ego = 0
-    alt_other = 0
+    alt_other = 1
     
-    num_altruism_estimates = 2
+    num_altruism_estimates = 4
     alt_stepsize = 1/(num_altruism_estimates-1)
-    alt_other_prior = [   alt_stepsize for _ in range(num_altruism_estimates)]
+    #alt_other_prior = [   alt_stepsize for _ in range(num_altruism_estimates)]
     ################################### 
     ###################################
     #For computing Rewards
@@ -351,19 +349,25 @@ if __name__ == "__main__":
     other_prior = [1/len(vehicle_traj_dict[other]) for _ in vehicle_traj_dict[other]]
 
     ###################################
-    #Construct Reward Grid so Other can choose trajectory
-    true_reward_grid = makeRewardGrid(vehicle_traj_list[other],vehicle_traj_rewards[other],alt_other,vehicle_traj_list[ego],vehicle_traj_rewards[ego],alt_ego,dt,safety_params)
+    ###################################
+    #Initialise cur_trajectories so Bayesian Estimation of Trajectory can be performed
+    cur_trajectories = {}
 
-    
+    ###################################
+    ###################################
+    #Construct Reward Grid so Other can choose trajectory
+    true_reward_grid = makeRewardGrid(vehicle_traj_dict[other],vehicle_traj_rewards[other],alt_other,vehicle_traj_dict[ego],vehicle_traj_rewards[ego],alt_ego,dt,safety_params)
+
     max_row_r = None
     max_row_index = None
-    for j in range(reward_grid.shape[0]):
-       if max_row_r is None or max(reward_grid[j,:,0])>max_row_r:
-           max_row_r = max(reward_grid[j,:,0])
+    for j in range(true_reward_grid.shape[0]):
+       if max_row_r is None or max(true_reward_grid[j,:,0])>max_row_r:
+           max_row_r = max(true_reward_grid[j,:,0])
            max_row_index = j
 
-    other_trajectory = vehicle_traj_list[other][max_row_index]
+    other_trajectory = vehicle_traj_dict[other][max_row_index]
 
+    ###################################
     ###################################
     #Run Simulation to estimate Trajectory and Altruism simultaneously
     for t in np.arange(0,T,dt):
@@ -373,9 +377,9 @@ if __name__ == "__main__":
         other_prior = updatePreference(cur_trajectories[other],init_trajectory_costs[other],other_prior)
 
         #Update Prior over Altruism
-        alt_other_prior = updateAltruism(vehicle_traj_list[other],vehicle_reward_list[other],vehicle_traj_list[ego],vehicle_traj_rewards[ego],alt_ego,dt,safety_params,alt_other_prior,other_prior,alt_stepsize)
+        alt_other_prior = updateAltruism(vehicle_traj_dict[other],vehicle_traj_rewards[other],vehicle_traj_dict[ego],vehicle_traj_rewards[ego],alt_ego,dt,safety_params,other_prior,alt_stepsize)
 
-        if t%.t == 0:
+        if t%.5 == 0:
             print("T: {}\tTraj {}".format(t,[round(x,2) for x in other_prior]))
             print("T: {}\tAlt: {}\n".format(t,[round(x,2) for x in alt_other_prior]))
 
