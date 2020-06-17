@@ -226,6 +226,7 @@ if __name__ == "__main__":
     ego.initialisation_params["prev_disp_x"] = other.initialisation_params["prev_disp_x"]
     other.y_com = ego.y_com + 100 # Move other behind ego
     other.initialisation_params["prev_disp_y"] = ego.initialisation_params["prev_disp_y"] + 100
+    
     ego.sense()
     other.sense()
 
@@ -292,15 +293,15 @@ if __name__ == "__main__":
         if t%.5==0:
             print("T: {}\t{}".format(t,[round(x,2) for x in other_prior]))
 
-        action = (idm(other.state,ego.state),0)
-        #action = (idm(other.state,None),0) #IDM going in a straight line
+        #action = (idm(other.state,ego.state),0)
+        action = (idm(other.state,None),0) #IDM going in a straight line
         #action = other_trajectory.action(t,other.Lf+other.Lr) # Following preset trajectory
         other.setAction(*action)
         other.move()
         other.sense()
         #other_state = other_trajectory.state(t+dt)
         other_state = filterState(other.state,other.Lf+other.Lr)
-        print("Other: Posit: {} V: {} Act: ({},{})\t Obstacle: {}\n".format(other_state["position"],other_state["velocity"],other_state["acceleration"],other_state["yaw_rate"],ego.state["position"]))
+        #print("Other: Posit: {} V: {} Act: ({},{})\t Obstacle: {}\n".format(other_state["position"],other_state["velocity"],other_state["acceleration"],other_state["yaw_rate"],ego.state["position"]))
 
         #if t>=4:
         #    import pdb

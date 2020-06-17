@@ -98,7 +98,7 @@ class Trajectory():
         y_dot = evaluate(t,self.y_dot)
 
         if x_dot == 0:
-            if y_dot>0: heading = 90
+            if y_dot>=0: heading = 90
             else: heading = 270
 
         else:
@@ -138,8 +138,9 @@ class Trajectory():
     def completeHeadingList(self,dt=.1):
         t = 0
         heading_list = []
-        while t<= self.traj_len_t+dt:
-            heading_list.append(self.heading(t))
+        while t<=self.traj_len_t+dt:
+            #Weird instabilities, round to 2 decimal places to minimise this effect
+            heading_list.append(self.heading(round(t,2)))
             t += dt
 
         return heading_list

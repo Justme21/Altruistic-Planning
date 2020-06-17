@@ -245,6 +245,8 @@ def IDM(ego_state,obstacle_state,delta,max_accel,max_decel,v_desired,time_headwa
         v_obs = obstacle_state["velocity"]
         del_v = v_ego - v_obs
         del_s = abs(ego_state["position"][1] - obstacle_state["position"][1])
+        #NOTE: Hardcoding this in to avoid divide by 0 error
+        if del_s<2: del_s = 2
 
         s_star = minimum_spacing + time_headway*v_ego + v_ego*del_v/(2*math.sqrt(max_accel*abs(max_decel))) # ensuring b is positive
         dist_term = s_star/del_s
@@ -275,8 +277,8 @@ if __name__ == "__main__":
     max_accel = 3
     max_decel = -3
     v_desired = 25 #m/s
-    time_headway = 2 #seconds headway
-    minimum_spacing = 2 #metres distance bumper to bumper between cars
+    time_headway = 1 #seconds headway
+    minimum_spacing = 4 #metres distance bumper to bumper between cars
 
     idm = lambda x,y: IDM(x,y,delta,max_accel,max_decel,v_desired,time_headway,minimum_spacing)
 
@@ -295,8 +297,19 @@ if __name__ == "__main__":
     other.initialisation_params["heading"] = other.heading
     other.sense()
 
+    #Cars next to each other for joint planning experiments
     other.y_com = ego.y_com
-    other.initialisation_params["prev_disp_y"] = ego.initialisation_params["prev_disp_y"] + 100
+    other.initialisation_params["prev_disp_y"] = ego.initialisation_params["prev_disp_y"]
+
+    #NOTE: IGNORE THIS FOR NOW. USED TO CONFIRM BAYES FILTER WAS WORKING
+    #Ego car must lead other for IDM experiments
+    #ego.v = 0.001 # setting vel=0 creates problems when computer parametrised accel
+    #ego.x_com = other.x_com
+    #ego.initialisation_params["prev_disp_x"] = other.initialisation_params["prev_disp_x"]
+    #ego.y_com = other.y_com-100
+    #ego.initialisation_params["prev_disp_y"] = other.initialisation_params["prev_disp_y"]-100
+
+    #Ensure state of both agents is accurate
     ego.sense()
     other.sense()
 
@@ -328,7 +341,7 @@ if __name__ == "__main__":
     ###################################
     #Initialise Altruism Ground Truth Values and Distribution
     alt_ego = 0
-    alt_other = 1
+    alt_other = 0
     
     num_altruism_estimates = 4
     alt_stepsize = 1/(num_altruism_estimates-1)
@@ -377,19 +390,27 @@ if __name__ == "__main__":
         other_prior = updatePreference(cur_trajectories[other],init_trajectory_costs[other],other_prior)
 
         #Update Prior over Altruism
+        #Needs to be done every timestep only if we are doing decision-making over altruism
+        # Basically a HMM with the estimated trajectory type as hidden state
         alt_other_prior = updateAltruism(vehicle_traj_dict[other],vehicle_traj_rewards[other],vehicle_traj_dict[ego],vehicle_traj_rewards[ego],alt_ego,dt,safety_params,other_prior,alt_stepsize)
 
         if t%.5 == 0:
             print("T: {}\tTraj {}".format(t,[round(x,2) for x in other_prior]))
             print("T: {}\tAlt: {}\n".format(t,[round(x,2) for x in alt_other_prior]))
 
-        #action = (idm(other.state,ego.state),0) # Controlled by reactive IDM
+        action = (idm(other.state,ego.state),0) # Controlled by reactive IDM
         #action = (idm(other.state,None),0) #IDM going in straight line
-        action = other_trajectory.action(t,other.Lf+other.Lr) # Following preset trajectory
+        #action = other_trajectory.action(t,other.Lf+other.Lr) # Following preset trajectory
         
         other.setAction(*action)
         other.move()
         other.sense()
+
+        #If ego does not move then IDM immediately slows down, but also moves past the ego car
+        # immediately. Every timestep thereafter the longitudinal distance between other and ego
+        # is increasing and IDM becomes more focused on reaching target velocity
+        ego.move()
+        ego.sense()
         #Other_state is defined at the start of the loop
             
     ###################################
