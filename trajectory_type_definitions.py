@@ -97,13 +97,21 @@ class Trajectory():
         #y_dot = -evaluate(t,self.y_dot)
         y_dot = evaluate(t,self.y_dot)
 
-        if x_dot == 0:
-            if y_dot>=0: heading = 90
-            else: heading = 270
+        if round(x_dot,2) == 0:
+            if round(y_dot,2)>=0: heading = 90
+            else:
+                #print("In heading now for x_dot = 0")
+                #import pdb
+                #pdb.set_trace()
+                heading = 270
 
         else:
             heading = math.degrees(math.atan(y_dot/x_dot))
-            if x_dot<0: heading = (heading+180)%360#atan has domain (-90,90) 
+            if x_dot<0: heading = (heading+180)%360#atan has domain (-90,90)
+            #if heading == 270:
+                #print("In heading now for x_dot != 0")
+                #import pdb
+                #pdb.set_trace()
 
         heading%=360
         return heading
@@ -129,7 +137,7 @@ class Trajectory():
     def completePositionList(self,dt=.1):
         t = 0
         position_list = []
-        while t<=self.traj_len_t+dt:
+        while round(t,2)<self.traj_len_t+dt:
             position_list.append(self.position(t))
             t += dt
 
@@ -138,18 +146,25 @@ class Trajectory():
     def completeHeadingList(self,dt=.1):
         t = 0
         heading_list = []
-        while t<=self.traj_len_t+dt:
+        while round(t,2)<self.traj_len_t+dt:
             #Weird instabilities, round to 2 decimal places to minimise this effect
             heading_list.append(self.heading(round(t,2)))
+            #if self.heading(round(t,2)) > 180.0:
+            #    import pdb
+            #    pdb.set_trace()
             t += dt
 
+        #if 270.0 in heading_list:
+        #    print("Jesus")
+        #    import pdb
+        #    pdb.set_trace()
         return heading_list
 
 
     def completeVelocityList(self,dt=.1):
         t = 0
         velocity_list = []
-        while t<=self.traj_len_t+dt:
+        while round(t,2)<self.traj_len_t+dt:
             velocity_list.append(math.sqrt(sum([x**2 for x in self.velocity(t)])))
             t += dt
 
@@ -159,7 +174,7 @@ class Trajectory():
     def completeActionList(self,axle_length,dt=.1):
         t = 0
         action_list = []
-        while t<=self.traj_len_t+dt:
+        while round(t,2)<=self.traj_len_t+dt:
             action_list.append(self.action(t,axle_length))
             t += dt
 
