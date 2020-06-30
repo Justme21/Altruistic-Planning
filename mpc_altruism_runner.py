@@ -84,8 +84,8 @@ def makeOptimiser(dt,horizon,lane_width,speed_limit,accel_range,yaw_rate_range):
     bounds = [0,2*lane_width,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
               yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = 1
-    safe_y_radius = 2
+    safe_x_radius = 2
+    safe_y_radius = 3
 
     opti = casadi.Opti()
 
@@ -101,7 +101,7 @@ def makeOptimiser(dt,horizon,lane_width,speed_limit,accel_range,yaw_rate_range):
     opti.set_value(safety_params,[safe_x_radius,safe_y_radius])
 
     weight = opti.parameter(4,1)
-    opti.set_value(weight,[10,0,1,1])
+    opti.set_value(weight,[50,0,50,10])
 
     #opti.minimize(sumsqr((x[:,1:]-dest_state)*weight) + .01*sumsqr(u[1,:])) #Distance to destination
     opti.minimize(sumsqr((x[:,1:]-dest_state)*weight)) # Distance to destination
@@ -264,12 +264,12 @@ if __name__ == "__main__":
 
     speed_limit = 15
     accel_range = [-3,3]
-    yaw_rate_range = [-math.pi/18,math.pi/18]    
+    yaw_rate_range = [-math.pi/180,math.pi/180]    
 
     init_c1_posit = [0.5*lane_width,0] # middle of right lane
     init_c2_posit = [1.5*lane_width,0] # middle of right lane
-    init_c1_vel = 10
-    init_c2_vel = 10
+    init_c1_vel = 15
+    init_c2_vel = 15
     init_c1_heading = math.pi/2
     init_c2_heading = math.pi/2
     init_c1_accel = 0
@@ -283,8 +283,8 @@ if __name__ == "__main__":
                                   init_c2_heading,init_c2_accel,init_c2_yaw_rate,axle_length)
     ###################################
     ##Define Trajectory Options
-    c1_traj_specs = [(0,0),(lane_width,0)]
-    c2_traj_specs = [(0,0),(0,-10)]
+    c1_traj_specs = [(0,-10),(lane_width,0)]
+    c2_traj_specs = [(0,-5),(0,0)]
 
     optimiser = makeOptimiser(dt,lookahead_horizon,lane_width,speed_limit,accel_range,yaw_rate_range)
 
@@ -295,8 +295,8 @@ if __name__ == "__main__":
     reward_grid = np.array([[[-1.0,-1.0],[0.0,1.0]],[[1.0,0.0],[-1.0,-1.0]]])
 
 
-    a1 = .48
-    a2 = .48
+    a1 = .1
+    a2 = .1
 
     #alt_values = [0,.25,.5,.75,.99]
     #for a1 in alt_values:
@@ -323,16 +323,20 @@ if __name__ == "__main__":
     c1_u = np.array([0,0]).reshape(2,1)
     c2_u = np.array([0,0]).reshape(2,1)
 
-    c1_dest = np.copy(c1_x)
+    c1_init = np.array([*init_c1_posit,init_c1_vel,init_c1_heading]).reshape(4,1)
+    c2_init = np.array([*init_c2_posit,init_c2_vel,init_c2_heading]).reshape(4,1)
+    
+    c1_dest = np.copy(c1_init)
     c1_dest[0] += c1_traj_specs[c1_index][0]
     c1_dest[2] += c1_traj_specs[c1_index][1]
     
-    c2_dest = np.copy(c2_x)
+    c2_dest = np.copy(c2_init)
     c2_dest[0] += c2_traj_specs[c2_index][0]
     c2_dest[2] += c2_traj_specs[c2_index][1]
 
     t = 0
     c1_t,c2_t = None,None
+    c1_to_global,c2_to_global = False, False
     c1_mpc_x,c2_mpc_x = np.array(c1_x),np.array(c2_x)
     c1_mpc_u,c2_mpc_u = np.array(c1_u),np.array(c2_u)
     num_timesteps = 4
@@ -396,9 +400,36 @@ if __name__ == "__main__":
         c1_mpc_u = np.hstack((c1_mpc_u,np.array(c1_opt_u[:,:num_timesteps])))
         c2_mpc_u = np.hstack((c2_mpc_u,np.array(c2_opt_u[:,:num_timesteps])))
 
+        if c1_t is None and computeDistance(c1_x,c1_dest)<epsilon:
+            if c1_to_global or max(reward_grid[c1_index,:,0]) == 1:
+                c1_t = t
+                print("C1_T set: {}".format(c1_t))
+            else:
+               c1_index = np.unravel_index(np.argmax(reward_grid[:,:,0]),reward_grid[:,:,0].shape)[0]
+               c1_dest = np.copy(c1_init)
+               c1_dest[0] += c1_traj_specs[c1_index][0]
+               c1_dest[2] += c1_traj_specs[c1_index][1]
+               c1_to_global = True #Now definitely going to global objective
+               print("Changing C1 Index: {}".format(c1_index))
 
-        if c1_t is None and computeDistance(c1_x,c1_dest)<epsilon: c1_t = t
-        if c2_t is None and computeDistance(c2_x,c2_dest)<epsilon: c2_t = t
+        elif c1_t is not None and computeDistance(c1_x,c1_dest)>epsilon: c1_t = None
+
+        if c2_t is None and computeDistance(c2_x,c2_dest)<epsilon:
+            if c2_to_global or max(reward_grid[:,c2_index,1]) == 1:
+                c2_t = t
+                print("C2_T set: {}".format(c2_t))
+            else:
+               c2_index = np.unravel_index(np.argmax(reward_grid[:,:,1]),reward_grid[:,:,1].shape)[1]
+               c2_dest = np.copy(c2_init)
+               c2_dest[0] += c2_traj_specs[c2_index][0]
+               c2_dest[2] += c2_traj_specs[c2_index][1]
+               c2_to_global = True #Now definitely going to global objective
+               print("Changing C2 Index: {}".format(c2_index))
+
+        elif c2_t is not None and computeDistance(c2_x,c2_dest)>epsilon: c2_t = None
+
+        #if c1_t is None and computeDistance(c1_x,c1_dest)<epsilon: c1_t = t
+        #if c2_t is None and computeDistance(c2_x,c2_dest)<epsilon: c2_t = t
 
         print("T is: {}\tD1: {}\t D2: {}".format(t,computeDistance(c1_x,c1_dest),computeDistance(c2_x,c2_dest)))
 
@@ -409,36 +440,36 @@ if __name__ == "__main__":
     #print("MPC Complete")
     #t2 = datetime.datetime.now()
     #print("Time: {}".format(t2-t1))
-    #pdb.set_trace()
+    pdb.set_trace()
 
     ########################################################################
     #### Plot Resulting Trajectories
-    #import matplotlib.pyplot as plt
-    #import time
+    import matplotlib.pyplot as plt
+    import time
 
-    #c1_plt_x = []
-    #c1_plt_y = []
-    #c2_plt_x = []
-    #c2_plt_y = []
+    c1_plt_x = []
+    c1_plt_y = []
+    c2_plt_x = []
+    c2_plt_y = []
 
-    #y_lim = max(np.max(c1_mpc_x[1,:]),np.max(c2_mpc_x[1,:]))*1.1
+    y_lim = max(np.max(c1_mpc_x[1,:]),np.max(c2_mpc_x[1,:]))*1.1
 
-    #plt.ion()
-    #plt.figure()
-    #plt.xlim(0,2*lane_width)
-    #plt.ylim(0,y_lim)
+    plt.ion()
+    plt.figure()
+    plt.xlim(0,2*lane_width)
+    plt.ylim(0,y_lim)
 
-    #for i in range(c1_mpc_x.shape[1]):
-    #    c1_plt_x.append(c1_mpc_x[0,i])
-    #    c1_plt_y.append(c1_mpc_x[1,i])
-    #    c2_plt_x.append(c2_mpc_x[0,i])
-    #    c2_plt_y.append(c2_mpc_x[1,i])
-    #    plt.plot(c1_plt_x,c1_plt_y,'g-')
-    #    plt.plot(c2_plt_x,c2_plt_y,'r-')
-    #    plt.draw()
-    #    plt.pause(1e-17)
-    #    time.sleep(dt)
+    for i in range(c1_mpc_x.shape[1]):
+        c1_plt_x.append(c1_mpc_x[0,i])
+        c1_plt_y.append(c1_mpc_x[1,i])
+        c2_plt_x.append(c2_mpc_x[0,i])
+        c2_plt_y.append(c2_mpc_x[1,i])
+        plt.plot(c1_plt_x,c1_plt_y,'g-')
+        plt.plot(c2_plt_x,c2_plt_y,'r-')
+        plt.draw()
+        plt.pause(1e-17)
+        time.sleep(dt)
 
-    #pdb.set_trace()
+    pdb.set_trace()
 
 #####################################
