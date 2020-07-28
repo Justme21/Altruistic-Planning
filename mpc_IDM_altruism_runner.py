@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt # for  plotting results
 import numpy as np # to get teh size of matrices
 import random # to add noise in mpc
 import time # for pausing when plotting dynamic plots
-from trajectory_type_definitions import Trajectory
 
 import pdb
 
@@ -58,6 +57,7 @@ def makeIntegrator(dt,veh_length):
 
     return F
 
+
 def makeIDMModel(has_new_leader,accel_bounds,accel_range,v_goal,d_goal,T_safe,veh_length):
     x_ego = MX.sym('x',4) # state <- x,y,v,heading
     x_lead = MX.sym('x',4) # state <- x,y,v,heading
@@ -92,15 +92,17 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     bounds = [veh_width/2,2*lane_width-veh_width/2,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
               yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = veh_width
-    safe_y_radius = veh_length
+    safe_x_radius = veh_width+.5
+    safe_y_radius = veh_length+1
 
     opti = casadi.Opti()
 
     #IDM Model
-    other_has_lead = opti.parameter(1,1)
+    has_lead1 = opti.parameter(1,1)
+    has_lead2 = opti.parameter(1,1)
     comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
-    FIDM = makeIDMModel(other_has_lead,comfort_accel_range,accel_range,15,.1,0.1,veh_length)
+    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,.1,0.1,veh_length)
+    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,.1,0.1,veh_length)
 
     #Optimisation Parameters
     x1 = opti.variable(4,N+1) # Decision variables for state trajectory
@@ -122,49 +124,52 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Optimisation
     #Minimise trajectory duration for planning car
     c1_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c1_traj_duration_weight,[5,0,1,1])
+    opti.set_value(c1_traj_duration_weight,[10,0,0,0])
     c1_min_traj_duration = sumsqr((x1[:,:]-dest_state1)*c1_traj_duration_weight)
     #Minimise final distance from objective for planning car
     c1_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c1_final_distance_weight,[5,0,5,100])
+    opti.set_value(c1_final_distance_weight,[10,0,0,0])
     c1_min_final_dist = sumsqr((x1[:,-1]-dest_state1)*c1_final_distance_weight)
     #Minimise Acceleration Magnitude
     c1_action_weight = opti.parameter(2,1)
-    opti.set_value(c1_action_weight,[1,1])
+    opti.set_value(c1_action_weight,[0,1])
     c1_min_accel = sumsqr(u1*c1_action_weight)
     #Minimise Jerk
     c1_jerk_weight = opti.parameter(2,1)
-    opti.set_value(c1_jerk_weight,[10,10])
+    opti.set_value(c1_jerk_weight,[0,0])
     c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
+
+    #Encourage other vehicle action solution to follow specified IDM model
+    c1_to_idm_weight = 10 #10
+    c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
 
     #Minimise trajectory duration for other car
     c2_traj_duration_weight = opti.parameter(4,1)
-    #Velocity of c2 dictated by IDM, so don't drive to velocity
-    opti.set_value(c2_traj_duration_weight,[5,0,0,1])
+    opti.set_value(c2_traj_duration_weight,[10,0,0,0])
     c2_min_traj_duration = sumsqr((x2[:,:]-dest_state2)*c2_traj_duration_weight)
     #Minimise final distance from objective for other car
     c2_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c2_final_distance_weight,[5,0,0,100])
+    opti.set_value(c2_final_distance_weight,[10,0,0,0])
     c2_min_final_dist = sumsqr((x2[:,-1]-dest_state2)*c2_final_distance_weight)
     #Minimise Acceleration Magnitude
     c2_action_weight = opti.parameter(2,1)
-    opti.set_value(c2_action_weight,[0,100]) #[5,100]
+    opti.set_value(c2_action_weight,[0,1]) #[5,100]
     c2_min_accel = sumsqr(u2*c2_action_weight)
     #Minimise Jerk
     c2_jerk_weight = opti.parameter(2,1)
-    opti.set_value(c2_jerk_weight,[0,100])
+    opti.set_value(c2_jerk_weight,[0,0])
     c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c2_to_idm_weight = 1 #10
-    c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM(x2[:,k],x1[:,k])) for k in range(N)])
+    c2_to_idm_weight = 10 #10
+    c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
 
     #Encourage cars to stay maximise distance between each other
     safety_weight = 0
     safety = safety_weight*sumsqr(1-(((x1[0,:]-x2[0,:])/safety_params[0])**2 + \
                           ((x1[1,:]-x2[1,:])/safety_params[1])**2))
 
-    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+\
+    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+c1_to_idm+\
                    c2_min_traj_duration+c2_min_final_dist+c2_min_accel+c2_min_jerk+\
                    c2_to_idm+safety)
 
@@ -209,8 +214,6 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Yaw Rate Constraints
     opti.subject_to(bnd[8]<=u2[1,:])
     opti.subject_to(u2[1,:]<=bnd[9])
-    #opti.subject_to(0<=u2[1,:])
-    #opti.subject_to(u2[1,:]<=0)
     #Initial position contraints
     opti.subject_to(x2[:,0]==init_state2) #Initial state
 
@@ -228,8 +231,8 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     opti.solver('ipopt',ipopt_opts)
 
     #Turn optimisation to CasADi function
-    M = opti.to_function('M',[init_state1,dest_state1,init_state2,dest_state2,other_has_lead],\
-                            [x1[:,:],u1[:,:],x2[:,:],u2[:,:]],['init1','dest1','init2','dest2','other_has_lead'],\
+    M = opti.to_function('M',[init_state1,dest_state1,has_lead1,init_state2,dest_state2,has_lead2],\
+                            [x1[:,:],u1[:,:],x2[:,:],u2[:,:]],['init1','dest1','has_lead2','init2','dest2','has_lead1'],\
                             ['x1_opt','u1_opt','x2_opt','u2_opt'])
 
     return M
@@ -362,7 +365,7 @@ if __name__ == "__main__":
     epsilon = .5
     lane_width = 4
     T = 10 #Trajectory length
-    lookahead_horizon = 6 # length of time MPC plans over
+    lookahead_horizon = 4 # length of time MPC plans over
     N = int(lookahead_horizon/dt)
 
     speed_limit = 15
@@ -371,7 +374,7 @@ if __name__ == "__main__":
 
     ###################################
     #Defining initial states for both cars
-    init_c1_posit = [0.5*lane_width,0] # middle of right lane
+    init_c1_posit = [0.5*lane_width,0*veh_length] # middle of right lane
     init_c1_vel = 15
     init_c1_heading = math.pi/2    
     init_c1_accel = 0
@@ -430,13 +433,9 @@ if __name__ == "__main__":
     c1_x = np.array([*init_c1_posit,init_c1_vel,init_c1_heading]).reshape(4,1)
     c2_x = np.array([*init_c2_posit,init_c2_vel,init_c2_heading]).reshape(4,1)
 
-    #Defining Vehicle actions for Optimiser
-    c1_u = np.array([0,0]).reshape(2,1)
-    c2_u = np.array([0,0]).reshape(2,1)
-
     #Recording trajectory generated by MPC loop
     c1_mpc_x,c2_mpc_x = np.array(c1_x),np.array(c2_x)
-    c1_mpc_u,c2_mpc_u = np.array(c1_u),np.array(c2_u)
+    c1_mpc_u,c2_mpc_u = np.array([0,0]).reshape(2,1),np.array([0,0]).reshape(2,1)
     
     ##########################################################################
     #Defining vehicle states for trajectory definition
@@ -447,9 +446,17 @@ if __name__ == "__main__":
     c1_dest[0] += c1_traj_specs[c1_index][0]
     c1_dest[2] += c1_traj_specs[c1_index][1]
     
+    c1_c2_dest = np.copy(c2_init)
+    c1_c2_dest[0] += c2_traj_specs[c1_c2_index][0]
+    c1_c2_dest[2] += c2_traj_specs[c1_c2_index][1]
+
     c2_dest = np.copy(c2_init)
     c2_dest[0] += c2_traj_specs[c2_index][0]
     c2_dest[2] += c2_traj_specs[c2_index][1]
+
+    c2_c1_dest = np.copy(c1_init)
+    c2_c1_dest[0] += c1_traj_specs[c2_c1_index][0]
+    c2_c1_dest[2] += c1_traj_specs[c2_c1_index][1]
 
     ########################################################################
     #For testing/debugging joint optimiser function
@@ -467,12 +474,17 @@ if __name__ == "__main__":
     true_c2_dest[0] += c2_traj_specs[true_c2_index][0]
     true_c2_dest[2] += c2_traj_specs[true_c2_index][1]
     
+    pdb.set_trace()    
 
-    #c1_joint_opt_x,c1_joint_opt_u,c2_joint_opt_x,c2_joint_opt_u =\
-    #           optimiser(c1_init,true_c1_dest,c2_init,true_c2_dest,true_c2_has_lead)
-    c2_joint_opt_x,c2_joint_opt_u,c1_joint_opt_x,c1_joint_opt_u =\
-               optimiser(c2_init,true_c2_dest,c1_init,true_c1_dest,true_c1_has_lead)
+    c1_c1_joint_opt_x,c1_c1_joint_opt_u,c1_c2_joint_opt_x,c1_c2_joint_opt_u =\
+              optimiser(c1_init,true_c1_dest,true_c1_has_lead,c2_init,true_c2_dest,true_c2_has_lead)
+    pdb.set_trace()
+
+    c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
+              optimiser(c2_init,true_c2_dest,true_c2_has_lead,c1_init,true_c1_dest,true_c1_has_lead)
    
+    pdb.set_trace()
+
     print("I1: {} ({}) I2: {} ({})\n".format(true_c1_index,true_c1_has_lead,true_c2_index,true_c2_has_lead))
  
     for j in range(c1_joint_opt_x.shape[1]):
@@ -480,227 +492,112 @@ if __name__ == "__main__":
         dx = abs(c1_joint_opt_x[0,j]-c2_joint_opt_x[0,j])
         dy = abs(c1_joint_opt_x[1,j]-c2_joint_opt_x[1,j])
         print("J: {}\tD: {}\t Dx: {}\t Dy: {}".format(j,dist,dx,dy))
-
+    
     print("\n")
-
+    
     print("I1: {} ({}) I2: {} ({})\n".format(true_c1_index,true_c1_has_lead,true_c2_index,true_c2_has_lead))
     for i in range(c2_joint_opt_u.shape[1]):
         print("{}\tD: {}\tV2: {}\tU2: {}\tV1: {}\tU1: {}".format(i,c1_joint_opt_x[1,i]-c2_joint_opt_x[1,i]-veh_length,c2_joint_opt_x[2,i],c2_joint_opt_u[:,i],c1_joint_opt_x[2,i],c1_joint_opt_u[:,i]))
-
+    
     # Plot Resulting Trajectories
-
     dynamicPlotter(c1_joint_opt_x,c2_joint_opt_x)
     pdb.set_trace()
+
     ########################################################################
 
     ##########################################################################
     #MPC Loop
-   # t = 0
-   # c1_t,c2_t = None,None #time at which each car completed their true objective
-   # c1_to_global,c2_to_global = False, False #if car has satisfied true objective
-   # num_timesteps = 2 # How many timesteps are followed per iteration
+    c1_c2_has_lead = c1_lead[c1_c2_index] #if c1 thinks c2 expects c1 to cut ahead
+    c2_c1_has_lead = c2_lead[c2_c1_index] #if c2 thinks c1 expects c2 to continue
+    t = 0
+    c1_t,c2_t = None,None #time at which each car completed their true objective
+    c1_to_global,c2_to_global = False, False #if car has satisfied true objective
+    num_timesteps = 2 # How many timesteps are followed per iteration
 
-   # while t<T and (c1_t is None or c2_t is None):
-   #     ###########################################
-   #     #### MPC for C1 ###########################
-   #     #How C1 expects C2 to behave
-   #     c1_c2_traj = makeTrajectories(makeTrajState(*[x[0] for x in c2_x.tolist()],*[x[0] for x in c2_u.tolist()],axle_length),\
-   #                                   [c2_traj_specs[c1_c2_index]],T-t,c2_init_state)[0]
-   #     c1_c2_posit = c1_c2_traj.completePositionList(dt)
-   #     c1_c2_vel = c1_c2_traj.completeVelocityList(dt)
-   #     c1_c2_heading = [math.radians(x) for x in c1_c2_traj.completeHeadingList(dt)]
-   #     # Not enough trajectory left, assume constant velocity thereafter
-   #     if len(c1_c2_posit)<N+1:
-   #         c1_c2_backup_traj = makeTrajectories(c1_c2_traj.state(T-t,axle_length),[(0,0)],T)[0]
-   #         c1_c2_posit += c1_c2_backup_traj.completePositionList(dt)[1:]
-   #         c1_c2_vel += c1_c2_backup_traj.completeVelocityList(dt)[1:]
-   #         c1_c2_heading += [math.radians(x) for x in c1_c2_backup_traj.completeHeadingList(dt)[1:]]
- 
-   #     #Behaviour within lookahead horizon
-   #     c1_c2_posit = c1_c2_posit[:N+1]
-   #     c1_c2_vel = c1_c2_vel[:N+1]
-   #     c1_c2_heading = c1_c2_heading[:N+1]
+    while t<T and (c1_t is None or c2_t is None):
+        ###########################################
+        #### MPC for C1 ###########################
+        c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c2_x,c1_c2_dest,c1_c2_has_lead)
 
-   #     c1_c2_x = np.array([[x[0] for x in c1_c2_posit],[x[1] for x in c1_c2_posit],\
-   #                         c1_c2_vel,c1_c2_heading])
-   #     
-   #     #Run MPC for C1
-   #     c1_opt_x,c1_opt_u = optimiser(c1_x,c1_dest,c1_c2_x)
+        ############################################
+        #### MPC for C2 ############################
+        c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c1_x,c2_c1_dest,c2_c1_has_lead)
+      
+        #############################################
+        #Debugging
+        #if True in [round(x,2)<round(c1_x.tolist()[1][0],2) for x in np.array(c1_opt_x[1,:num_timesteps-1]).tolist()[0]]:
+        #    print("New setting of C1_x is behind current")
+        #    import pdb
+        #    pdb.set_trace()
+        #if True in [round(x,2)<round(c2_x.tolist()[1][0],2) for x in np.array(c2_opt_x[1,:num_timesteps-1]).tolist()[0]]:
+        #    print("New setting of C2_x is behind current")
+        #    import pdb
+        #    pdb.set_trace()
 
-   #     ############################################
-   #     #### MPC for C2 ############################
-   #     #How C2 expects C1 to behave
-   #     c2_c1_traj = makeTrajectories(makeTrajState(*[x[0] for x in c1_x.tolist()],*[x[0] for x in c1_u.tolist()],axle_length),\
-   #                                   [c1_traj_specs[c2_c1_index]],T-t,c1_init_state)[0]
-   #     c2_c1_posit = c2_c1_traj.completePositionList(dt)
-   #     c2_c1_vel = c2_c1_traj.completeVelocityList(dt)
-   #     c2_c1_heading = [math.radians(x) for x in c2_c1_traj.completeHeadingList(dt)]
-   #     # Not enough trajectory left, assume constant velocity thereafter
-   #     if len(c2_c1_posit)<N+1:
-   #         c2_c1_backup_traj = makeTrajectories(c2_c1_traj.state(T-t,axle_length),[(0,0)],T)[0]
-   #         c2_c1_posit += c2_c1_backup_traj.completePositionList(dt)[1:]
-   #         c2_c1_vel += c2_c1_backup_traj.completeVelocityList(dt)[1:]
-   #         c2_c1_heading += [math.radians(x) for x in c2_c1_backup_traj.completeHeadingList(dt)[1:]]
+        #############################################
 
-   #     #Behaviour within lookahead horizon
-   #     c2_c1_posit = c2_c1_posit[:N+1]
-   #     c2_c1_vel = c2_c1_vel[:N+1]
-   #     c2_c1_heading = c2_c1_heading[:N+1]
-   #     c2_c1_x = np.array([[x[0] for x in c2_c1_posit],[x[1] for x in c2_c1_posit],\
-   #                         c2_c1_vel,c2_c1_heading])
-   #     
-   #     #Run MPC for C2
-   #     c2_opt_x,c2_opt_u = optimiser(c2_x,c2_dest,c2_c1_x)
-   #   
-   #     #############################################
-   #     #Debugging
-   #     if True in [round(x,2)<round(c1_x.tolist()[1][0],2) for x in np.array(c1_opt_x[1,:num_timesteps-1]).tolist()[0]]:
-   #         print("New setting of C1_x is behind current")
-   #         import pdb
-   #         pdb.set_trace()
-   #     if True in [round(x,2)<round(c2_x.tolist()[1][0],2) for x in np.array(c2_opt_x[1,:num_timesteps-1]).tolist()[0]]:
-   #         print("New setting of C2_x is behind current")
-   #         import pdb
-   #         pdb.set_trace()
+        for j in range(num_timesteps):
+            u1 = np.array(c1_opt_u[:,j])
+            u2 = np.array(c2_opt_u[:,j])
+            c1_x += dt*(np.array((c1_x[2]*math.cos(c1_x[3]+u1[1]),c1_x[2]*math.sin(c1_x[3]+u1[1]),u1[0],(2*c1_x[2]/veh_length)*math.sin(u1[1]))).reshape(4,1))
+            c2_x += dt*(np.array((c2_x[2]*math.cos(c2_x[3]+u2[1]),c2_x[2]*math.sin(c2_x[3]+u1[1]),u2[0],(2*c2_x[2]/veh_length)*math.sin(u2[1]))).reshape(4,1))
 
-   #     #############################################
+            ##############################################
+            #If MPC does not have safety as constraint then test for crash out here
+            crash_check = (((c1_x[0,:]-c2_x[0,:])/veh_width)**2 + ((c1_x[1,:]-c2_x[1,:])/veh_length)**2)
+            if crash_check<1:
+                print("Cars have crashed")
+                import pdb
+                pdb.set_trace()
+            ##############################################
 
-   #     ##MPC state and action if optimiser does not return current state as first output
-   #     #c1_x = np.array(c1_opt_x[:,num_timesteps-1])
-   #     #c2_x = np.array(c2_opt_x[:,num_timesteps-1])
-   #     #c1_u = np.array(c1_opt_u[:,num_timesteps-1])
-   #     #c2_u = np.array(c2_opt_u[:,num_timesteps-1])
+            ##############################################
+            #Store MPC generated trajectories
+            c1_mpc_u = np.hstack((c1_mpc_u,np.array(u1)))
+            c2_mpc_u = np.hstack((c2_mpc_u,np.array(u2)))
+            c1_mpc_x = np.hstack((c1_mpc_x,np.array(c1_x)))
+            c2_mpc_x = np.hstack((c2_mpc_x,np.array(c2_x)))
 
-   #     #MPC state and action if optimiser returns current state as first output
-   #     c1_x = np.array(c1_opt_x[:,num_timesteps])
-   #     c2_x = np.array(c2_opt_x[:,num_timesteps])
-   #     c1_u = np.array(c1_opt_u[:,num_timesteps])
-   #     c2_u = np.array(c2_opt_u[:,num_timesteps])
-   #     
-   #     ##############################################
-   #     #If MPC does not have safety as constraint then test for crash out here
-   #     if (c1_x[0]-c2_x[0])**2+(c1_x[1]-c2_x[1])**2<math.sqrt((veh_length/2)**2+(veh_width/2)**2):
-   #         print("Cars have crashed")
-   #         import pdb
-   #         pdb.set_trace()
-   #     ##############################################
+        t += num_timesteps*dt
 
-   #     t += num_timesteps*dt
+        ##############################################
+        #Debugging
+        if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
+            print("Problem in C1 MPC")
+            import pdb
+            pdb.set_trace()
 
-   #     ##############################################
-   #     #Debugging
-   #     if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
-   #         print("Problem in C1 MPC")
-   #         import pdb
-   #         pdb.set_trace()
+        if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
+            print("Problem in C2 MPC")
+            import pdb
+            pdb.set_trace()
+        ###############################################
 
-   #     if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
-   #         print("Problem in C2 MPC")
-   #         import pdb
-   #         pdb.set_trace()
-   #     ###############################################
+        ################################################
+        #If C1 satisfies their current objective
+        if c1_t is None and computeDistance(c1_x,c1_dest)<epsilon:
+            c1_t = t #Time C1 satisfied trajectory
+            print("C1_T set: {}".format(c1_t))
+        #C1 has drifted from their objective, reset value
+        elif c1_t is not None and computeDistance(c1_x,c1_dest)>epsilon: c1_t = None
 
-   #     ##############################################
-   #     #Store MPC generated trajectories
-   #     c1_mpc_x = np.hstack((c1_mpc_x,np.array(c1_opt_x[:,:num_timesteps])))
-   #     c2_mpc_x = np.hstack((c2_mpc_x,np.array(c2_opt_x[:,:num_timesteps])))
-   #     c1_mpc_u = np.hstack((c1_mpc_u,np.array(c1_opt_u[:,:num_timesteps])))
-   #     c2_mpc_u = np.hstack((c2_mpc_u,np.array(c2_opt_u[:,:num_timesteps])))
+        ###############################################
+        #If C2 satisfies their current objective
+        if c2_t is None and computeDistance(c2_x,c2_dest)<epsilon:
+            c2_t = t
+            print("C2_T set: {}".format(c2_t))
+        #C2 has drifted from their objective, reset value.
+        elif c2_t is not None and computeDistance(c2_x,c2_dest)>epsilon: c2_t = None
 
-   #     ################################################
-   #     #If C1 satisfies their current objective
-   #     if c1_t is None and computeDistance(c1_x,c1_dest)<epsilon:
-   #         #Objective is "true" objective
-   #         if c1_to_global or max(reward_grid[c1_index,:,0]) == 1:
-   #             c1_to_global = True
-   #             c1_t = t #Time C1 satisfied trajectory
-   #             print("C1_T set: {}".format(c1_t))
-   #         #Objective is not "true" objective, c1 presumes c2 has been accommodated
-   #         # pursues their own objective.
-   #         else:
-   #            c1_index = np.unravel_index(np.argmax(reward_grid[:,:,0]),reward_grid[:,:,0].shape)[0]
-   #            c1_dest = np.copy(c1_init)
-   #            c1_dest[0] += c1_traj_specs[c1_index][0]
-   #            c1_dest[2] += c1_traj_specs[c1_index][1]
-   #            c1_to_global = True #Now definitely going to global objective
-   #            print("Changing C1 Index: {}".format(c1_index))
-
-   #            #Used for computing relative jerk used
-   #            c1_traj = makeTrajectories(makeTrajState(*[x[0] for x in c1_x.tolist()],*[x[0] for x in c1_u.tolist()],axle_length),\
-   #                                   [c1_traj_specs[c1_index]],T-t,c1_init_state)[0]
-   #            c1_traj_ssu += sum([x[0]**2+x[1]**2 for x in c1_traj.completeActionList(axle_length,dt)])
-
-   #     #C1 has drifted from their objective, reset value
-   #     elif c1_t is not None and computeDistance(c1_x,c1_dest)>epsilon: c1_t = None
-
-   #     ###############################################
-   #     #If C2 satisfies their current objective
-   #     if c2_t is None and computeDistance(c2_x,c2_dest)<epsilon:
-   #         #Objective is "true" objective
-   #         if c2_to_global or max(reward_grid[:,c2_index,1]) == 1:
-   #             c2_to_global = True
-   #             c2_t = t
-   #             print("C2_T set: {}".format(c2_t))
-   #         #Objective is not "true" objective, c2 presumes c1 has been accomodated
-   #         # pursues their own objective. 
-   #         else:
-   #            c2_index = np.unravel_index(np.argmax(reward_grid[:,:,1]),reward_grid[:,:,1].shape)[1]
-   #            c2_dest = np.copy(c2_init)
-   #            c2_dest[0] += c2_traj_specs[c2_index][0]
-   #            c2_dest[2] += c2_traj_specs[c2_index][1]
-   #            c2_to_global = True #Now definitely going to global objective
-   #            print("Changing C2 Index: {}".format(c2_index))
-
-   #            #Used for computing relative jerk used
-   #            c2_traj = makeTrajectories(makeTrajState(*[x[0] for x in c2_x.tolist()],*[x[0] for x in c2_u.tolist()],axle_length),\
-   #                                   [c2_traj_specs[c2_index]],T-t,c2_init_state)[0]
-   #            c2_traj_ssu += sum([x[0]**2+x[1]**2 for x in c2_traj.completeActionList(axle_length,dt)])
-
-   #     #C" has drifted from their objective, reset value.
-   #     elif c2_t is not None and computeDistance(c2_x,c2_dest)>epsilon: c2_t = None
-
-   #     print("T is: {}\tD1: {}\t D2: {}".format(t,computeDistance(c1_x,c1_dest),computeDistance(c2_x,c2_dest)))
+        print("T is: {}\tD1: {}\t D2: {}".format(t,computeDistance(c1_x,c1_dest),computeDistance(c2_x,c2_dest)))
 
 
-   # #print("MPC Complete")
-   # #t2 = datetime.datetime.now()
-   # #print("Time: {}".format(t2-t1))
-   # #pdb.set_trace()
+    print("MPC Complete")
+    #t2 = datetime.datetime.now()
+    #print("Time: {}".format(t2-t1))
+    #pdb.set_trace()
 
-   # ########################################################################
-   # #Comparing MPC with fit trajectory
-   # true_c1_index = np.unravel_index(np.argmax(reward_grid[:,:,0]),reward_grid[:,:,0].shape)[0]
-   # true_c2_index = np.unravel_index(np.argmax(reward_grid[:,:,1]),reward_grid[:,:,1].shape)[1]
-   # 
-   # true_c1_dest = np.copy(c1_init)
-   # true_c1_dest[0] += c1_traj_specs[true_c1_index][0]
-   # true_c1_dest[2] += c1_traj_specs[true_c1_index][1]
-   # 
-   # true_c2_dest = np.copy(c2_init)
-   # true_c2_dest[0] += c2_traj_specs[true_c2_index][0]
-   # true_c2_dest[2] += c2_traj_specs[true_c2_index][1]
- 
-   # jointOpt = makeJointOptimiser(dt,t,veh_width,veh_length,lane_width,speed_limit,accel_range,yaw_rate_range)
-   # c1_joint_opt_x,c1_joint_opt_u,c2_joint_opt_x,c2_joint_opt_u =\
-   #            jointOpt(c1_init,true_c1_dest,c2_init,true_c2_dest)
-   # 
-   # c1_joint_ssu = np.sum(c1_joint_opt_u**2)
-   # c2_joint_ssu = np.sum(c2_joint_opt_u**2)
-
-   # c1_mpc_ssu = np.sum(c1_mpc_u**2)
-   # c2_mpc_ssu = np.sum(c2_mpc_u**2)
-
-   # c1_ssu_diff = c1_mpc_ssu - c1_joint_ssu
-   # c2_ssu_diff = c2_mpc_ssu - c2_joint_ssu
-
-   # print("C1 SSU: {}\tOPT: {}\tDiff: {}".format(c1_mpc_ssu,c1_joint_ssu,c1_ssu_diff))
-   # print("C2 SSU: {}\tOPT: {}\tDiff: {}".format(c2_mpc_ssu,c2_joint_ssu,c2_ssu_diff))
-   # print("MPC SSU Total: {}\t OPT SSU Total: {}\t Diff Total: {}".format(c1_mpc_ssu+c2_mpc_ssu,c1_joint_ssu+c2_joint_ssu,c1_ssu_diff+c2_ssu_diff))
-
-   # # Plot Resulting Trajectories
-   # pdb.set_trace()
-   # dynamicPlotter(c1_mpc_x,c2_mpc_x)
-   # dynamicPlotter(c1_joint_opt_x,c2_joint_opt_x)
-   # pdb.set_trace()
+    dynamicPlotter(c1_mpc_x,c2_mpc_x)
+    pdb.set_trace()
 
 #####################################
