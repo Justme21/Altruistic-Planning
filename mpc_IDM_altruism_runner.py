@@ -65,16 +65,21 @@ def makeIDMModel(has_new_leader,accel_bounds,accel_range,v_goal,d_goal,T_safe,ve
 
     del_v = x_ego[2]-x_lead[2]
 
-    del_v = if_else(del_v<-1,-1,del_v) #mitigates lead slowing down to facilitate IDM model
+    #del_v = if_else(del_v<-1,-1,del_v) #mitigates lead slowing down to facilitate IDM model
 
     d_star = d_goal + T_safe*x_ego[2] + x_ego[2]*del_v/(2*sqrt(accel_bounds[1]*(-accel_bounds[0])))
     
-    d = x_lead[1]-x_ego[1] - veh_length #rear to front distance = midpoint_distance-rear_half_of_lead-front_half_of_follower
+    d = x_lead[1]-x_ego[1] - veh_length +.00001 #rear to front distance = midpoint_distance-rear_half_of_lead-front_half_of_follower
 
-    d = if_else(d<0,1,d)
+    #d = if_else(d<0,1,d)
 
-    v_dot = if_else(has_new_leader==1.0,accel_bounds[1]*(1-(x_ego[2]/v_goal)**4-(d_star/d)**2),\
-                                        accel_bounds[1]*(1-(x_ego[2]/v_goal)**4))
+    #v_dot = if_else(has_new_leader==1.0,accel_bounds[1]*(1-(x_ego[2]/v_goal)**4-(d_star/d)**2),\
+    #                                    accel_bounds[1]*(1-(x_ego[2]/v_goal)**4))
+
+    v_dot = accel_bounds[1]*(1-(x_ego[2]/v_goal)**4-has_new_leader*(d_star/d)**2)
+
+    v_dot = if_else(v_dot<accel_bounds[0],accel_bounds[0],v_dot)
+    v_dot = if_else(v_dot>accel_bounds[1],accel_bounds[1],v_dot)
 
     idm = Function('idm',[x_ego,x_lead],[v_dot],['x_ego','x_leader'],['v_dot'])
     return idm
@@ -101,8 +106,8 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     has_lead1 = opti.parameter(1,1)
     has_lead2 = opti.parameter(1,1)
     comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
-    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,.1,0.1,veh_length)
-    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,.1,0.1,veh_length)
+    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,.5,.5,veh_length)
+    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,.5,.5,veh_length)
 
     #Optimisation Parameters
     x1 = opti.variable(4,N+1) # Decision variables for state trajectory
@@ -124,15 +129,15 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Optimisation
     #Minimise trajectory duration for planning car
     c1_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c1_traj_duration_weight,[10,0,0,0])
+    opti.set_value(c1_traj_duration_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
     c1_min_traj_duration = sumsqr((x1[:,:]-dest_state1)*c1_traj_duration_weight)
     #Minimise final distance from objective for planning car
     c1_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c1_final_distance_weight,[10,0,0,0])
+    opti.set_value(c1_final_distance_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
     c1_min_final_dist = sumsqr((x1[:,-1]-dest_state1)*c1_final_distance_weight)
     #Minimise Acceleration Magnitude
     c1_action_weight = opti.parameter(2,1)
-    opti.set_value(c1_action_weight,[0,1])
+    opti.set_value(c1_action_weight,[0,0])
     c1_min_accel = sumsqr(u1*c1_action_weight)
     #Minimise Jerk
     c1_jerk_weight = opti.parameter(2,1)
@@ -140,20 +145,20 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c1_to_idm_weight = 10 #10
+    c1_to_idm_weight = 100 #10
     c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
 
     #Minimise trajectory duration for other car
     c2_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c2_traj_duration_weight,[10,0,0,0])
+    opti.set_value(c2_traj_duration_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
     c2_min_traj_duration = sumsqr((x2[:,:]-dest_state2)*c2_traj_duration_weight)
     #Minimise final distance from objective for other car
     c2_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c2_final_distance_weight,[10,0,0,0])
+    opti.set_value(c2_final_distance_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
     c2_min_final_dist = sumsqr((x2[:,-1]-dest_state2)*c2_final_distance_weight)
     #Minimise Acceleration Magnitude
     c2_action_weight = opti.parameter(2,1)
-    opti.set_value(c2_action_weight,[0,1]) #[5,100]
+    opti.set_value(c2_action_weight,[0,0]) #[5,100]
     c2_min_accel = sumsqr(u2*c2_action_weight)
     #Minimise Jerk
     c2_jerk_weight = opti.parameter(2,1)
@@ -161,7 +166,7 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c2_to_idm_weight = 10 #10
+    c2_to_idm_weight = 100 #10
     c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
 
     #Encourage cars to stay maximise distance between each other
@@ -349,8 +354,8 @@ def dynamicPlotter(mpc_x1,mpc_x2):
 
 
 def computeDistance(x1,x2):
-    #distance from desired x-position and velocity
-    return math.sqrt((x1[0]-x2[0])**2 + (x1[2]-x2[2])**2)
+    #distance from desired x-position and heading
+    return math.sqrt((x1[0]-x2[0])**2 + (x1[3]-x2[3])**2)
 
 if __name__ == "__main__":
     ###################################
@@ -362,7 +367,7 @@ if __name__ == "__main__":
     #Optimiser Parameters
     axle_length = 2.7
     dt = .2
-    epsilon = .5
+    epsilon = .05
     lane_width = 4
     T = 10 #Trajectory length
     lookahead_horizon = 4 # length of time MPC plans over
@@ -375,14 +380,20 @@ if __name__ == "__main__":
     ###################################
     #Defining initial states for both cars
     init_c1_posit = [0.5*lane_width,0*veh_length] # middle of right lane
+    #init_c1_posit = [5.999999999759031,100.33806170613234] # middle of right lane
     init_c1_vel = 15
-    init_c1_heading = math.pi/2    
+    #init_c1_vel = 15.000000148175012
+    init_c1_heading = math.pi/2 
+    #init_c1_heading = 1.570796326801073
     init_c1_accel = 0
     init_c1_yaw_rate = 0
 
-    init_c2_posit = [1.5*lane_width,0] # middle of right lane
+    init_c2_posit = [1.5*lane_width,.5*veh_length] # middle of right lane
+    #init_c2_posit = [5.999999999759481,86.98855921231758] # middle of right lane
     init_c2_vel = 15
+    #init_c2_vel = 14.028355864011774
     init_c2_heading = math.pi/2
+    #init_c2_heading = 1.5707963267952259
     init_c2_accel = 0
     init_c2_yaw_rate = 0
 
@@ -443,19 +454,23 @@ if __name__ == "__main__":
     c2_init = np.array([*init_c2_posit,init_c2_vel,init_c2_heading]).reshape(4,1)
     
     c1_dest = np.copy(c1_init)
-    c1_dest[0] += c1_traj_specs[c1_index][0]
+    c1_dest[0] = 6 #NOTE: RECALL THIS
+    #c1_dest[0] += c1_traj_specs[c1_index][0]
     c1_dest[2] += c1_traj_specs[c1_index][1]
     
     c1_c2_dest = np.copy(c2_init)
-    c1_c2_dest[0] += c2_traj_specs[c1_c2_index][0]
+    c1_c2_dest[0] = 6 #NOTE: RECALL THIS
+    #c1_c2_dest[0] += c2_traj_specs[c1_c2_index][0]
     c1_c2_dest[2] += c2_traj_specs[c1_c2_index][1]
 
     c2_dest = np.copy(c2_init)
-    c2_dest[0] += c2_traj_specs[c2_index][0]
+    c2_dest[0] = 6 #NOTE: RECALL THIS 
+    #c2_dest[0] += c2_traj_specs[c2_index][0]
     c2_dest[2] += c2_traj_specs[c2_index][1]
 
     c2_c1_dest = np.copy(c1_init)
-    c2_c1_dest[0] += c1_traj_specs[c2_c1_index][0]
+    c2_c1_dest[0] = 6 #NOTE: RECALL THIS
+    #c2_c1_dest[0] += c1_traj_specs[c2_c1_index][0]
     c2_c1_dest[2] += c1_traj_specs[c2_c1_index][1]
 
     ########################################################################
@@ -464,51 +479,38 @@ if __name__ == "__main__":
     true_c2_index = np.unravel_index(np.argmax(goal_grid[:,:,1]),goal_grid[:,:,1].shape)[1]
     
     true_c1_dest = np.copy(c1_init)
-    true_c1_dest[0] += c1_traj_specs[true_c1_index][0]
+    true_c1_dest[0] = 6 #NOTE: RECALL THIS
+    #true_c1_dest[0] += c1_traj_specs[true_c1_index][0]
     true_c1_dest[2] += c1_traj_specs[true_c1_index][1]
     
     true_c1_has_lead = c1_lead[true_c1_index]
     true_c2_has_lead = c2_lead[true_c2_index]
     
     true_c2_dest = np.copy(c2_init)
-    true_c2_dest[0] += c2_traj_specs[true_c2_index][0]
+    true_c2_dest[0] = 6 #NOTE: RECALL THIS
+    #true_c2_dest[0] += c2_traj_specs[true_c2_index][0]
     true_c2_dest[2] += c2_traj_specs[true_c2_index][1]
     
-    pdb.set_trace()    
-
     c1_c1_joint_opt_x,c1_c1_joint_opt_u,c1_c2_joint_opt_x,c1_c2_joint_opt_u =\
               optimiser(c1_init,true_c1_dest,true_c1_has_lead,c2_init,true_c2_dest,true_c2_has_lead)
-    pdb.set_trace()
 
     c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
               optimiser(c2_init,true_c2_dest,true_c2_has_lead,c1_init,true_c1_dest,true_c1_has_lead)
    
     pdb.set_trace()
 
-    print("I1: {} ({}) I2: {} ({})\n".format(true_c1_index,true_c1_has_lead,true_c2_index,true_c2_has_lead))
- 
-    for j in range(c1_joint_opt_x.shape[1]):
-        dist = math.sqrt((c1_joint_opt_x[0,j]-c2_joint_opt_x[0,j])**2+(c1_joint_opt_x[1,j]-c2_joint_opt_x[1,j])**2)
-        dx = abs(c1_joint_opt_x[0,j]-c2_joint_opt_x[0,j])
-        dy = abs(c1_joint_opt_x[1,j]-c2_joint_opt_x[1,j])
-        print("J: {}\tD: {}\t Dx: {}\t Dy: {}".format(j,dist,dx,dy))
-    
-    print("\n")
-    
-    print("I1: {} ({}) I2: {} ({})\n".format(true_c1_index,true_c1_has_lead,true_c2_index,true_c2_has_lead))
-    for i in range(c2_joint_opt_u.shape[1]):
-        print("{}\tD: {}\tV2: {}\tU2: {}\tV1: {}\tU1: {}".format(i,c1_joint_opt_x[1,i]-c2_joint_opt_x[1,i]-veh_length,c2_joint_opt_x[2,i],c2_joint_opt_u[:,i],c1_joint_opt_x[2,i],c1_joint_opt_u[:,i]))
-    
     # Plot Resulting Trajectories
-    dynamicPlotter(c1_joint_opt_x,c2_joint_opt_x)
-    pdb.set_trace()
+    #dynamicPlotter(c1_joint_opt_x,c2_joint_opt_x)
+    #pdb.set_trace()
 
     ########################################################################
 
     ##########################################################################
     #MPC Loop
-    c1_c2_has_lead = c1_lead[c1_c2_index] #if c1 thinks c2 expects c1 to cut ahead
-    c2_c1_has_lead = c2_lead[c2_c1_index] #if c2 thinks c1 expects c2 to continue
+    c1_c1_has_lead = c1_lead[c1_index] #if c1 thinks they are going to cut ahead
+    c1_c2_has_lead = c1_lead[c1_c2_index] #if c1 thinks c2 will give way
+    c2_c1_has_lead = c2_lead[c2_c1_index] #if c2 thinks c1 will give way
+    c2_c2_has_lead = c2_lead[c2_index] #if c2 thinks they are expected to continue
     t = 0
     c1_t,c2_t = None,None #time at which each car completed their true objective
     c1_to_global,c2_to_global = False, False #if car has satisfied true objective
@@ -517,12 +519,13 @@ if __name__ == "__main__":
     while t<T and (c1_t is None or c2_t is None):
         ###########################################
         #### MPC for C1 ###########################
-        c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c2_x,c1_c2_dest,c1_c2_has_lead)
+        c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c1_c1_has_lead,c2_x,c1_c2_dest,c1_c2_has_lead)
 
         ############################################
         #### MPC for C2 ############################
-        c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c1_x,c2_c1_dest,c2_c1_has_lead)
+        c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c2_c2_has_lead,c1_x,c2_c1_dest,c2_c1_has_lead)
       
+        #pdb.set_trace()
         #############################################
         #Debugging
         #if True in [round(x,2)<round(c1_x.tolist()[1][0],2) for x in np.array(c1_opt_x[1,:num_timesteps-1]).tolist()[0]]:
@@ -535,12 +538,48 @@ if __name__ == "__main__":
         #    pdb.set_trace()
 
         #############################################
+        ##############################################
+        #Debugging
+        #if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
+        #    print("Problem in C1 MPC")
+        #    import pdb
+        #    pdb.set_trace()
+        #
+        #if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
+        #    print("Problem in C2 MPC")
+        #    import pdb
+        #    pdb.set_trace()
+
+        while (True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]) or \
+           (True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]):
+            if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
+                print("Problem in C1 MPC")
+                import pdb
+                pdb.set_trace()
+
+            if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
+                print("Problem in C2 MPC")
+                import pdb
+                pdb.set_trace()
+
+            for j in range(c1_x.shape[0]):
+                c1_x[j,0] = round(c1_x[j,0],1)
+                c2_x[j,0] = round(c2_x[j,0],1)
+
+            c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c1_c1_has_lead,c2_x,c1_c2_dest,c1_c2_has_lead)
+            c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c2_c2_has_lead,c1_x,c2_c1_dest,c2_c1_has_lead)
+            import pdb
+            pdb.set_trace()
+        ###############################################
 
         for j in range(num_timesteps):
             u1 = np.array(c1_opt_u[:,j])
             u2 = np.array(c2_opt_u[:,j])
-            c1_x += dt*(np.array((c1_x[2]*math.cos(c1_x[3]+u1[1]),c1_x[2]*math.sin(c1_x[3]+u1[1]),u1[0],(2*c1_x[2]/veh_length)*math.sin(u1[1]))).reshape(4,1))
-            c2_x += dt*(np.array((c2_x[2]*math.cos(c2_x[3]+u2[1]),c2_x[2]*math.sin(c2_x[3]+u1[1]),u2[0],(2*c2_x[2]/veh_length)*math.sin(u2[1]))).reshape(4,1))
+            #c1_x += dt*(np.array((c1_x[2]*math.cos(c1_x[3]+u1[1]),c1_x[2]*math.sin(c1_x[3]+u1[1]),u1[0],(2*c1_x[2]/veh_length)*math.sin(u1[1]))).reshape(4,1))
+            #c2_x += dt*(np.array((c2_x[2]*math.cos(c2_x[3]+u2[1]),c2_x[2]*math.sin(c2_x[3]+u1[1]),u2[0],(2*c2_x[2]/veh_length)*math.sin(u2[1]))).reshape(4,1))
+
+            c1_x = np.array(c1_opt_x[:,j+1])
+            c2_x = np.array(c2_opt_x[:,j+1])
 
             ##############################################
             #If MPC does not have safety as constraint then test for crash out here
@@ -560,18 +599,6 @@ if __name__ == "__main__":
 
         t += num_timesteps*dt
 
-        ##############################################
-        #Debugging
-        if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
-            print("Problem in C1 MPC")
-            import pdb
-            pdb.set_trace()
-
-        if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
-            print("Problem in C2 MPC")
-            import pdb
-            pdb.set_trace()
-        ###############################################
 
         ################################################
         #If C1 satisfies their current objective
