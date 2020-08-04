@@ -137,16 +137,17 @@ class Trajectory():
     def completePositionList(self,dt=.1):
         t = 0
         position_list = []
-        while round(t,2)<self.traj_len_t+dt:
-            position_list.append(self.position(t))
+        while round(t,2)<=self.traj_len_t:
+            position_list.append(self.position(round(t,2)))
             t += dt
 
         return position_list
 
+
     def completeHeadingList(self,dt=.1):
         t = 0
         heading_list = []
-        while round(t,2)<self.traj_len_t+dt:
+        while round(t,2)<=self.traj_len_t:
             #Weird instabilities, round to 2 decimal places to minimise this effect
             heading_list.append(self.heading(round(t,2)))
             #if self.heading(round(t,2)) > 180.0:
@@ -164,8 +165,8 @@ class Trajectory():
     def completeVelocityList(self,dt=.1):
         t = 0
         velocity_list = []
-        while round(t,2)<self.traj_len_t+dt:
-            velocity_list.append(math.sqrt(sum([x**2 for x in self.velocity(t)])))
+        while round(t,2)<=self.traj_len_t:
+            velocity_list.append(math.sqrt(sum([x**2 for x in self.velocity(round(t,2))])))
             t += dt
 
         return velocity_list
@@ -174,8 +175,8 @@ class Trajectory():
     def completeActionList(self,axle_length,dt=.1):
         t = 0
         action_list = []
-        while round(t,2)<=self.traj_len_t+dt:
-            action_list.append(self.action(t,axle_length))
+        while round(t,2)<=self.traj_len_t:
+            action_list.append(self.action(round(t,2),axle_length))
             t += dt
 
         return action_list

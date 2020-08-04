@@ -97,8 +97,8 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     bounds = [veh_width/2,2*lane_width-veh_width/2,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
               yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = veh_width+.5
-    safe_y_radius = veh_length+1
+    safe_x_radius = veh_width+.25
+    safe_y_radius = veh_length+.5
 
     opti = casadi.Opti()
 
@@ -106,8 +106,8 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     has_lead1 = opti.parameter(1,1)
     has_lead2 = opti.parameter(1,1)
     comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
-    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,.5,.5,veh_length)
-    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,.5,.5,veh_length)
+    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,1,.8,veh_length)
+    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,1,.8,veh_length)
 
     #Optimisation Parameters
     x1 = opti.variable(4,N+1) # Decision variables for state trajectory
@@ -231,10 +231,10 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     ipopt_opts["ipopt.sb"] = "yes";
     ipopt_opts["print_time"] = 0
     #Cap the maximum number of iterations
-    ipopt_opts["ipopt.max_iter"] = 500
+    ipopt_opts["ipopt.max_iter"] = 1500
 
     opti.solver('ipopt',ipopt_opts)
-
+    
     #Turn optimisation to CasADi function
     M = opti.to_function('M',[init_state1,dest_state1,has_lead1,init_state2,dest_state2,has_lead2],\
                             [x1[:,:],u1[:,:],x2[:,:],u2[:,:]],['init1','dest1','has_lead2','init2','dest2','has_lead1'],\
@@ -243,57 +243,6 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     return M
 
 #####################################################################################################
-#####################################################################################################
-#Trajectory Stuff
-
-def makeTrajectories(cur_state,spec,T,init_state=None):
-    """Returns a list of trajectories starting from cur_state, of length T.
-       Spec is a list of (dx,dv) pairs, where each pair corresponds to a distinct trajectory
-       specification.
-       If init_state is specified then the destination states for the trajectories will be set
-       from init_state (as opposed to cur state)"""
-    traj_list = []
-
-    # Init_state is the state the trajectories are supposed to have originated at. If init_state is None then
-    # assume the current state is the initial state of the trajectory
-    if init_state is None:
-        init_state = cur_state
-
-    #pdb.set_trace()
-
-    for dx,dv in zip([x[0] for x in spec], [x[1] for x in spec]):
-        label = "dx-{},dv-{}".format(dx,dv)
-        dest_state = dict(init_state)
-        dest_state["position"] = tuple([dest_state["position"][0]+dx,dest_state["position"][1]])
-        dest_state["velocity"] += dv
-        dest_state["parametrised_acceleration"] = (0,0) #parametrised acceleration is introduced to handle acceleration constraints
-        traj = Trajectory(cur_state,dest_state,T,label)
-        traj_list.append(traj)
-
-    return traj_list
-
-
-def getParametrisedAcceleration(vel,heading,accel,yaw_rate,axle_length):
-    x_dot = vel*math.cos(math.radians(heading))
-    y_dot = vel*math.sin(math.radians(heading))
-    x_dot_dot = (vel*accel/x_dot) - (y_dot/x_dot)*(1/vel)*(y_dot*accel - (x_dot*(vel**2)*math.tan(math.radians(yaw_rate))/axle_length))
-    y_dot_dot = (1/vel)*(y_dot*accel - (x_dot*(vel**2)*math.tan(math.radians(yaw_rate))/axle_length))
-
-    return (x_dot_dot,y_dot_dot)
-
-
-def filterState(state,axle_length):
-    state = dict(state)
-    state["heading"] = math.degrees(state["heading"])
-    state["parametrised_acceleration"] = getParametrisedAcceleration(state["velocity"],state["heading"],state["acceleration"],state["yaw_rate"],axle_length)
-
-    return state
-
-def makeTrajState(pos_x,pos_y,v,heading,accel,yaw_rate,axle_length):
-    return filterState({"position":(pos_x,pos_y),"velocity":v,"heading":heading,"acceleration": accel, "yaw_rate": yaw_rate},axle_length)
-
-
-###################################################################################################
 ####### Reward Grid Stuff #########################################################################
 
 def makeBaselineRewardGrid(reward_grid):
@@ -356,6 +305,7 @@ def dynamicPlotter(mpc_x1,mpc_x2):
 def computeDistance(x1,x2):
     #distance from desired x-position and heading
     return math.sqrt((x1[0]-x2[0])**2 + (x1[3]-x2[3])**2)
+###################################################################################################
 
 if __name__ == "__main__":
     ###################################
@@ -388,7 +338,7 @@ if __name__ == "__main__":
     init_c1_accel = 0
     init_c1_yaw_rate = 0
 
-    init_c2_posit = [1.5*lane_width,.5*veh_length] # middle of right lane
+    init_c2_posit = [1.5*lane_width,0*veh_length] # middle of right lane
     #init_c2_posit = [5.999999999759481,86.98855921231758] # middle of right lane
     init_c2_vel = 15
     #init_c2_vel = 14.028355864011774
@@ -397,16 +347,8 @@ if __name__ == "__main__":
     init_c2_accel = 0
     init_c2_yaw_rate = 0
 
-    c1_init_state = makeTrajState(init_c1_posit[0],init_c1_posit[1],init_c1_vel,\
-                                  init_c1_heading,init_c1_accel,init_c1_yaw_rate,axle_length)
-    c2_init_state = makeTrajState(init_c2_posit[0],init_c2_posit[1],init_c2_vel,\
-                                  init_c2_heading,init_c2_accel,init_c2_yaw_rate,axle_length)
-
     ###################################
     #Define Trajectory Options
-    c1_traj_specs = [(lane_width,0),(lane_width,0)]
-    c2_traj_specs = [(0,0),(0,0)]
-
     c1_lead = [1,0]
     c2_lead = [1,0]
 
@@ -420,8 +362,8 @@ if __name__ == "__main__":
     #reward_grid = np.array([[[-np.inf,-np.inf],[0,1]],[[1,0],[-np.inf,-np.inf]]])
     reward_grid = np.array([[[-1.0,-1.0],[0.0,1.0]],[[1.0,0.0],[-1.0,-1.0]]])
 
-    a1 = .1
-    a2 = .9
+    a1 = .9
+    a2 = .1
 
     #goal_grid = makeBaselineRewardGrid(reward_grid,a1,a2)
     goal_grid = makeVanillaAltRewardGrid(reward_grid,a1,a2)
@@ -454,24 +396,20 @@ if __name__ == "__main__":
     c2_init = np.array([*init_c2_posit,init_c2_vel,init_c2_heading]).reshape(4,1)
     
     c1_dest = np.copy(c1_init)
-    c1_dest[0] = 6 #NOTE: RECALL THIS
-    #c1_dest[0] += c1_traj_specs[c1_index][0]
-    c1_dest[2] += c1_traj_specs[c1_index][1]
+    c1_dest[0] += lane_width
+    c1_dest[2] += 0
     
     c1_c2_dest = np.copy(c2_init)
-    c1_c2_dest[0] = 6 #NOTE: RECALL THIS
-    #c1_c2_dest[0] += c2_traj_specs[c1_c2_index][0]
-    c1_c2_dest[2] += c2_traj_specs[c1_c2_index][1]
+    c1_c2_dest[0] += 0
+    c1_c2_dest[2] += 0
 
     c2_dest = np.copy(c2_init)
-    c2_dest[0] = 6 #NOTE: RECALL THIS 
-    #c2_dest[0] += c2_traj_specs[c2_index][0]
-    c2_dest[2] += c2_traj_specs[c2_index][1]
+    c2_dest[0] += 0
+    c2_dest[2] += 0
 
     c2_c1_dest = np.copy(c1_init)
-    c2_c1_dest[0] = 6 #NOTE: RECALL THIS
-    #c2_c1_dest[0] += c1_traj_specs[c2_c1_index][0]
-    c2_c1_dest[2] += c1_traj_specs[c2_c1_index][1]
+    c2_c1_dest[0] += lane_width
+    c2_c1_dest[2] += 0
 
     ########################################################################
     #For testing/debugging joint optimiser function
@@ -480,22 +418,22 @@ if __name__ == "__main__":
     
     true_c1_dest = np.copy(c1_init)
     true_c1_dest[0] = 6 #NOTE: RECALL THIS
-    #true_c1_dest[0] += c1_traj_specs[true_c1_index][0]
-    true_c1_dest[2] += c1_traj_specs[true_c1_index][1]
+    true_c1_dest[2] += 0
     
     true_c1_has_lead = c1_lead[true_c1_index]
     true_c2_has_lead = c2_lead[true_c2_index]
     
     true_c2_dest = np.copy(c2_init)
     true_c2_dest[0] = 6 #NOTE: RECALL THIS
-    #true_c2_dest[0] += c2_traj_specs[true_c2_index][0]
-    true_c2_dest[2] += c2_traj_specs[true_c2_index][1]
+    true_c2_dest[2] += 0
     
+    c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
+              optimiser(c2_init,true_c2_dest,true_c2_has_lead,c1_init,true_c1_dest,true_c1_has_lead)
     c1_c1_joint_opt_x,c1_c1_joint_opt_u,c1_c2_joint_opt_x,c1_c2_joint_opt_u =\
               optimiser(c1_init,true_c1_dest,true_c1_has_lead,c2_init,true_c2_dest,true_c2_has_lead)
 
-    c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
-              optimiser(c2_init,true_c2_dest,true_c2_has_lead,c1_init,true_c1_dest,true_c1_has_lead)
+    #c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
+    #          optimiser(c2_init,true_c2_dest,true_c2_has_lead,c1_init,true_c1_dest,true_c1_has_lead)
    
     pdb.set_trace()
 
@@ -513,7 +451,6 @@ if __name__ == "__main__":
     c2_c2_has_lead = c2_lead[c2_index] #if c2 thinks they are expected to continue
     t = 0
     c1_t,c2_t = None,None #time at which each car completed their true objective
-    c1_to_global,c2_to_global = False, False #if car has satisfied true objective
     num_timesteps = 2 # How many timesteps are followed per iteration
 
     while t<T and (c1_t is None or c2_t is None):

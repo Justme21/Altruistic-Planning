@@ -71,7 +71,7 @@ def makeIntegrator(dt):
     return F
 
 
-def makeOptimiser(dt,horizon,lane_width,speed_limit,accel_range,yaw_rate_range):
+def makeOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit,accel_range,yaw_rate_range):
     #########################################################
     ##### Make Integrator ###################################
     F = makeIntegrator(dt)
@@ -81,11 +81,11 @@ def makeOptimiser(dt,horizon,lane_width,speed_limit,accel_range,yaw_rate_range):
 
     N = int(horizon/dt)
     #x_low,x_high,speed_low,speed_high,heading_low,heading_high,accel_low,accel_high,yaw_low,yaw_high
-    bounds = [0,2*lane_width,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
+    bounds = [veh_width/2,2*lane_width-veh_width/2,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
               yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = 2
-    safe_y_radius = 3
+    safe_x_radius = veh_width/2 + 1
+    safe_y_radius = veh_length/2 +1
 
     opti = casadi.Opti()
 
@@ -249,15 +249,19 @@ def computeDistance(x1,x2):
 if __name__ == "__main__":
     ###################################
     #Number of times to run experiments
-    num_its = 2
+    num_its = 10
+    
+    #Vehicle dimensions
+    veh_length = 4.6
+    veh_width = 2
 
     ###################################
     ###################################
     #Optimiser Parameters
-    axle_length = 4
-    dt = .2
-    epsilon = .5
-    lane_width = 5
+    axle_length = 2.7 # length of car axle
+    dt = .2 # timestep size
+    epsilon = .5 # maximum distance from objective for experiment to finish
+    lane_width = 4 # width of a lane
     T = 10 #Trajectory length
     lookahead_horizon = 4 # length of time MPC plans over
     N = int(lookahead_horizon/dt)
@@ -267,10 +271,21 @@ if __name__ == "__main__":
     yaw_rate_range = [-math.pi/180,math.pi/180]    
 
     ###################################
+    #Experiment Parameters
+    exp_name = "AugmentedAltruism"
+    #rewardDefinition = makeBaselineRewardGrid
+    #rewardDefinition = makeVanillaRewardGrid
+    rewardDefinition = makeAugmentedRewardGrid
+    #rewardDefinition = makeSVORewardGrid
+
+    values = [0,.25,.51,.75,.99] #Altruism
+    #values = [0,math.pi/8,math.pi/4,3*math.pi/8,math.pi/2] #SVO
+    
+    ###################################
     #Initialise Experiment File
     import datetime
     start_time = datetime.datetime.now()
-    exp_file = open("AugmentedAltruism-{}.txt".format(start_time),"w")
+    exp_file = open("{}-{}.txt".format(exp_name,start_time),"w")
     exp_file.write("~~####~~\n\n")
     exp_file.write("axle_length: {}\ndt: {}\nepsilon: {}\tlane_width: {}\nT: {}\nlookahead_horizon: {}\nN: {}\nspeed_limit: {}\taccel_range: {}\tyaw_rate_range: {}\n".format(axle_length,dt,epsilon,lane_width,T,lookahead_horizon,N,speed_limit,accel_range,yaw_rate_range))
     exp_file.write("\n")
@@ -283,7 +298,7 @@ if __name__ == "__main__":
     exp_file.write("c1_traj_specs: {}\nc2_traj_specs: {}\n".format(c1_traj_specs,c2_traj_specs))
     exp_file.write("\n")
 
-    optimiser = makeOptimiser(dt,lookahead_horizon,lane_width,speed_limit,accel_range,yaw_rate_range)
+    optimiser = makeOptimiser(dt,lookahead_horizon,veh_width,veh_length,lane_width,speed_limit,accel_range,yaw_rate_range)
 
     #Use float values or else numpy will round to int
     #reward_grid = np.array([[[-np.inf,-np.inf],[0,1]],[[1,0],[-np.inf,-np.inf]]])
@@ -292,26 +307,19 @@ if __name__ == "__main__":
     exp_file.write("reward_grid:\n {}\n".format(reward_grid))
     exp_file.write("\n")
 
-    #a1 = .48
-    #a2 = .48
-
-    alt_values = [0,.25,.51,.75,.99]
-    #svo_values = [0,math.pi/8,math.pi/4,3*math.pi/8,math.pi/2]
-
-    exp_file.write("Altruism Values: {}\n\n".format(alt_values))
-    #exp_file.write("SVO Values: {}\n\n".format(svo_values))
+    exp_file.write("Parameter Values: {}\n\n".format(values))
     exp_file.close()
 
-    #for svo1 in svo_values:
-    #    for svo2 in svo_values:
-    for a1 in alt_values:
-        for a2 in alt_values:
-            exp_file = open("AugmentedAltruism-{}.txt".format(start_time),"a")
+    for a1 in values:
+        for a2 in values:
+            exp_file = open("{}-{}.txt".format(exp_name,start_time),"a")
             exp_file.write("\n~~####~~\n\n")
             exp_file.write("a1: {}\t a2: {}\n".format(a1,a2))
-            #exp_file.write("svo1: {}\t svo2: {}\n".format(svo1,svo2))
+            
+            goal_grid = rewardDefinition(reward_grid,a1,a2)
+
             #goal_grid = makeBaselineRewardGrid(reward_grid)
-            goal_grid = makeVanillaAltRewardGrid(reward_grid,a1,a2)
+            #goal_grid = makeVanillaAltRewardGrid(reward_grid,a1,a2)
             #goal_grid = makeAugmentedAltRewardGrid(reward_grid,a1,a2)
             #goal_grid = makeSVORewardGrid(reward_grid,svo1,svo2)
             #goal_grid = makeRecipriocalRewardGrid(reward_grid,a1,a2)
@@ -332,9 +340,9 @@ if __name__ == "__main__":
             
             np.random.seed(27)
             for exp_num in range(num_its):
-                c1_noise_x = -.25*lane_width + np.random.random()*lane_width*.25
+                c1_noise_x = -.25*lane_width + np.random.random()*lane_width*.5
                 c1_noise_y = np.random.random()*5 
-                c2_noise_x = -.25*lane_width + np.random.random()*lane_width*.25
+                c2_noise_x = -.25*lane_width + np.random.random()*lane_width*.5
                 c2_noise_y = np.random.random()*5
 
                 init_c1_posit = [0.5*lane_width+c1_noise_x,0+c1_noise_y] # middle of right lane
@@ -379,7 +387,7 @@ if __name__ == "__main__":
                 c1_mpc_x,c2_mpc_x = np.array(c1_x),np.array(c2_x)
                 c1_mpc_u,c2_mpc_u = np.array(c1_u),np.array(c2_u)
                 num_timesteps = 4
-                #while t<T and (computeDistance(c1_x,c1_dest)>epsilon or computeDistance(c2_x,c2_dest)>epsilon):
+                
                 while t<T and (c1_t is None or c2_t is None):
                     ################################
                     #### MPC for C1 ################
@@ -472,7 +480,19 @@ if __name__ == "__main__":
                 if c1_t is None: c1_t = t
                 if c2_t is None: c2_t = t
 
-                exp_file = open("AugmentedAltruism-{}.txt".format(start_time),"a")
+                #####################################################################
+                # For Comparing MPC to Fit Trajectory
+                import pdb
+                pdb.set_trace()
+                c1_traj = makeTrajectories(c1_init_state,[c1_traj_specs[c1_index]],T)
+                c1_traj_u = sum([x[0]**2+x[1]**2 for x in c1_traj.completeActionList(axle_length,dt)])
+                c2_traj = makeTrajectories(c1_init_state,[c1_traj_specs[c1_index]],T)
+                c2_traj_u = sum([x[0]**2+x[1]**2 for x in c2_traj.completeActionList(axle_length,dt)])
+
+                
+                #####################################################################
+                
+                exp_file = open("{}-{}.txt".format(exp_name,start_time),"a")
                 exp_file.write("Exp_Num: {}\tt: {}\tc1_t: {}\tc2_t: {}\n".format(exp_num,t,c1_t,c2_t))
                 exp_file.close()
 
