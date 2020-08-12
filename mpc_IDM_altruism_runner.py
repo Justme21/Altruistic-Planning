@@ -97,17 +97,17 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     bounds = [veh_width/2,2*lane_width-veh_width/2,0,speed_limit,0,math.pi,accel_range[0],accel_range[1],\
               yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = veh_width+.25
-    safe_y_radius = veh_length+.5
+    safe_x_radius = veh_width + .5
+    safe_y_radius = veh_length + 1 
 
     opti = casadi.Opti()
 
     #IDM Model
     has_lead1 = opti.parameter(1,1)
     has_lead2 = opti.parameter(1,1)
-    comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
-    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,1,.8,veh_length)
-    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,1,.8,veh_length)
+    #comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
+    #FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,1,.8,veh_length)
+    #FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,1,.8,veh_length)
 
     #Optimisation Parameters
     x1 = opti.variable(4,N+1) # Decision variables for state trajectory
@@ -129,11 +129,11 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Optimisation
     #Minimise trajectory duration for planning car
     c1_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c1_traj_duration_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
+    opti.set_value(c1_traj_duration_weight,[2,0,1,0])
     c1_min_traj_duration = sumsqr((x1[:,:]-dest_state1)*c1_traj_duration_weight)
     #Minimise final distance from objective for planning car
     c1_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c1_final_distance_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
+    opti.set_value(c1_final_distance_weight,[2,0,1,0])
     c1_min_final_dist = sumsqr((x1[:,-1]-dest_state1)*c1_final_distance_weight)
     #Minimise Acceleration Magnitude
     c1_action_weight = opti.parameter(2,1)
@@ -145,16 +145,21 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c1_to_idm_weight = 100 #10
-    c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
+    #c1_to_idm_weight = 100 #10
+    #c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
+    c1_to_idm = 0
+
+    #If the car has a leader, motivate it to get behind the other car
+    c1_behind_c2_weight = 10*has_lead1
+    c1_behind_c2 = sum2(fmax(x1[1,:]-x2[1,:],0))*c1_behind_c2_weight
 
     #Minimise trajectory duration for other car
     c2_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c2_traj_duration_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
+    opti.set_value(c2_traj_duration_weight,[2,0,1,0])
     c2_min_traj_duration = sumsqr((x2[:,:]-dest_state2)*c2_traj_duration_weight)
     #Minimise final distance from objective for other car
     c2_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c2_final_distance_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
+    opti.set_value(c2_final_distance_weight,[2,0,1,0])
     c2_min_final_dist = sumsqr((x2[:,-1]-dest_state2)*c2_final_distance_weight)
     #Minimise Acceleration Magnitude
     c2_action_weight = opti.parameter(2,1)
@@ -166,16 +171,21 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c2_to_idm_weight = 100 #10
-    c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
+    #c2_to_idm_weight = 100 #10
+    #c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
+    c2_to_idm = 0
+
+    #If the car has a leader, motivate it to get behind the other car
+    c2_behind_c1_weight = 10*has_lead2
+    c2_behind_c1 = sum2(fmax(x2[1,:]-x1[1,:],0))*c2_behind_c1_weight
 
     #Encourage cars to stay maximise distance between each other
     safety_weight = 0
     safety = safety_weight*sumsqr(1-(((x1[0,:]-x2[0,:])/safety_params[0])**2 + \
                           ((x1[1,:]-x2[1,:])/safety_params[1])**2))
 
-    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+c1_to_idm+\
-                   c2_min_traj_duration+c2_min_final_dist+c2_min_accel+c2_min_jerk+\
+    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+c1_to_idm+c1_behind_c2+\
+                   c2_min_traj_duration+c2_min_final_dist+c2_min_accel+c2_min_jerk+c2_behind_c1+\
                    c2_to_idm+safety)
 
     for k in range(N):
@@ -338,7 +348,7 @@ if __name__ == "__main__":
     init_c1_accel = 0
     init_c1_yaw_rate = 0
 
-    init_c2_posit = [1.5*lane_width,0*veh_length] # middle of right lane
+    init_c2_posit = [1.5*lane_width,1.25*veh_length] # middle of right lane
     #init_c2_posit = [5.999999999759481,86.98855921231758] # middle of right lane
     init_c2_vel = 15
     #init_c2_vel = 14.028355864011774
@@ -362,7 +372,7 @@ if __name__ == "__main__":
     #reward_grid = np.array([[[-np.inf,-np.inf],[0,1]],[[1,0],[-np.inf,-np.inf]]])
     reward_grid = np.array([[[-1.0,-1.0],[0.0,1.0]],[[1.0,0.0],[-1.0,-1.0]]])
 
-    a1 = .9
+    a1 = .1
     a2 = .1
 
     #goal_grid = makeBaselineRewardGrid(reward_grid,a1,a2)
@@ -487,26 +497,26 @@ if __name__ == "__main__":
         #    import pdb
         #    pdb.set_trace()
 
-        while (True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]) or \
-           (True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]):
-            if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
-                print("Problem in C1 MPC")
-                import pdb
-                pdb.set_trace()
+        #while (True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]) or \
+        #   (True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]):
+            #if True in [c1_opt_x[1,i]>c1_opt_x[1,i+1]+.02 for i in range(c1_opt_x.shape[1]-1)]:
+            #    print("Problem in C1 MPC")
+            #    import pdb
+            #    pdb.set_trace()
 
-            if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
-                print("Problem in C2 MPC")
-                import pdb
-                pdb.set_trace()
+            #if True in [c2_opt_x[1,i]>c2_opt_x[1,i+1]+.02 for i in range(c2_opt_x.shape[1]-1)]:
+            #    print("Problem in C2 MPC")
+            #    import pdb
+            #    pdb.set_trace()
 
-            for j in range(c1_x.shape[0]):
-                c1_x[j,0] = round(c1_x[j,0],1)
-                c2_x[j,0] = round(c2_x[j,0],1)
+            #for j in range(c1_x.shape[0]):
+            #    c1_x[j,0] = round(c1_x[j,0],1)
+            #    c2_x[j,0] = round(c2_x[j,0],1)
 
-            c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c1_c1_has_lead,c2_x,c1_c2_dest,c1_c2_has_lead)
-            c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c2_c2_has_lead,c1_x,c2_c1_dest,c2_c1_has_lead)
-            import pdb
-            pdb.set_trace()
+            #c1_opt_x,c1_opt_u,c1_c2_opt_x,c1_c2_opt_u = optimiser(c1_x,c1_dest,c1_c1_has_lead,c2_x,c1_c2_dest,c1_c2_has_lead)
+            #c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_dest,c2_c2_has_lead,c1_x,c2_c1_dest,c2_c1_has_lead)
+            #import pdb
+            #pdb.set_trace()
         ###############################################
 
         for j in range(num_timesteps):

@@ -98,9 +98,9 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #IDM Model
     has_lead1 = opti.parameter(1,1)
     has_lead2 = opti.parameter(1,1)
-    comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
-    FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,1,.8,veh_length)
-    FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,1,.8,veh_length)
+    #comfort_accel_range = [-2.5,2] # NOTE: Manually specifying values
+    #FIDM1 = makeIDMModel(has_lead1,comfort_accel_range,accel_range,15,1,.8,veh_length)
+    #FIDM2 = makeIDMModel(has_lead2,comfort_accel_range,accel_range,15,1,.8,veh_length)
 
     #Optimisation Parameters
     x1 = opti.variable(4,N+1) # Decision variables for state trajectory
@@ -122,11 +122,11 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Optimisation
     #Minimise trajectory duration for planning car
     c1_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c1_traj_duration_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
+    opti.set_value(c1_traj_duration_weight,[2,0,1,0])
     c1_min_traj_duration = sumsqr((x1[:,:]-dest_state1)*c1_traj_duration_weight)
     #Minimise final distance from objective for planning car
     c1_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c1_final_distance_weight,[10,0,1+(not has_lead1.is_eye())*4,0])
+    opti.set_value(c1_final_distance_weight,[2,0,1,0])
     c1_min_final_dist = sumsqr((x1[:,-1]-dest_state1)*c1_final_distance_weight)
     #Minimise Acceleration Magnitude
     c1_action_weight = opti.parameter(2,1)
@@ -138,16 +138,21 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c1_to_idm_weight = 100 #10
-    c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
+    #c1_to_idm_weight = 100 #10
+    #c1_to_idm = c1_to_idm_weight*sum([sumsqr(u1[0,k]-FIDM1(x1[:,k],x2[:,k])) for k in range(N)])
+    c1_to_idm = 0 
+
+    #If the car has a leader, motivate it to get behind the other car
+    c1_behind_c2_weight = 10*has_lead1
+    c1_behind_c2 = sum2(fmax(x1[1,:]-x2[1,:],0))*c1_behind_c2_weight
 
     #Minimise trajectory duration for other car
     c2_traj_duration_weight = opti.parameter(4,1)
-    opti.set_value(c2_traj_duration_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
+    opti.set_value(c2_traj_duration_weight,[2,0,1,0])
     c2_min_traj_duration = sumsqr((x2[:,:]-dest_state2)*c2_traj_duration_weight)
     #Minimise final distance from objective for other car
     c2_final_distance_weight = opti.parameter(4,1)
-    opti.set_value(c2_final_distance_weight,[10,0,1+(not has_lead2.is_eye())*4,0])
+    opti.set_value(c2_final_distance_weight,[2,0,1,0])
     c2_min_final_dist = sumsqr((x2[:,-1]-dest_state2)*c2_final_distance_weight)
     #Minimise Acceleration Magnitude
     c2_action_weight = opti.parameter(2,1)
@@ -159,16 +164,21 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
 
     #Encourage other vehicle action solution to follow specified IDM model
-    c2_to_idm_weight = 100 #10
-    c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
+    #c2_to_idm_weight = 100 #10
+    #c2_to_idm = c2_to_idm_weight*sum([sumsqr(u2[0,k]-FIDM2(x2[:,k],x1[:,k])) for k in range(N)])
+    c2_to_idm = 0
+
+    #If the car has a leader, motivate it to get behind the other car
+    c2_behind_c1_weight = 10*has_lead2
+    c2_behind_c1 = sum2(fmax(x2[1,:]-x1[1,:],0))*c2_behind_c1_weight
 
     #Encourage cars to stay maximise distance between each other
     safety_weight = 0
     safety = safety_weight*sumsqr(1-(((x1[0,:]-x2[0,:])/safety_params[0])**2 + \
                           ((x1[1,:]-x2[1,:])/safety_params[1])**2))
 
-    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+c1_to_idm+\
-                   c2_min_traj_duration+c2_min_final_dist+c2_min_accel+c2_min_jerk+\
+    opti.minimize(c1_min_traj_duration+c1_min_final_dist+c1_min_accel+c1_min_jerk+c1_to_idm+c1_behind_c2+\
+                   c2_min_traj_duration+c2_min_final_dist+c2_min_accel+c2_min_jerk+c2_behind_c1+\
                    c2_to_idm+safety)
 
     for k in range(N):
@@ -400,7 +410,7 @@ if __name__ == "__main__":
     rewardDefinition = makeVanillaAltRewardGrid
 
     alt_values = [.1,.9] #Altruism
-    N = 8
+    N = 6
     shift_values = [x*.25*veh_length for x in range(N+1)]     
  
     ###################################
@@ -501,11 +511,21 @@ if __name__ == "__main__":
                     # Run MPC
                     result,t,c1_has_shift,c2_has_shift,c1_mpc_x,c1_mpc_u,c2_mpc_x,c2_mpc_u =\
                     doMPC(num_timesteps,T,c1_init,c1_dests,c1_leads,c2_init,c2_dests,c2_leads,shift_tol)
+                    #Legend:
+                    #  - result = 1: converged to solution
+                    #  - result = 0: failed to converge to solution solution
+                    #  - result = -1: trajectory crashed
+
                     outcome = 0
                     if result is 1: #Converged to satisfactory solution
                         if c1_mpc_x[1,-1]>c2_mpc_x[1,-1]: outcome = 1
                         else: outcome = -1
-                       
+
+                    #Legend:
+                    #  - outcome = 1: c1 ended up ahead of c2
+                    #  - outcome = 0: no solution was generated
+                    #  - outcome = -1: c1 ended up behind c2
+
                     #####################################################################
                     #Record Results                
                     exp_file = open("{}-{}.txt".format(exp_name,start_time),"a")
