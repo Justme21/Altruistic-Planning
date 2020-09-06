@@ -69,8 +69,8 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     #speed_low,speed_high,heading_low,heading_high,accel_low,accel_high,yaw_low,yaw_high
     bounds = [0,speed_limit,accel_range[0],accel_range[1],yaw_rate_range[0],yaw_rate_range[1]]
 
-    safe_x_radius = veh_width + .5
-    safe_y_radius = veh_length + 1 
+    safe_x_radius = veh_width + .25
+    safe_y_radius = veh_length + .5 
 
     opti = casadi.Opti()
 
@@ -91,7 +91,7 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     opti.set_value(bnd,bounds)
 
     safety_params = opti.parameter(2,1)
-    opti.set_value(safety_params,[safe_x_radius,safe_y_radius])
+    opti.set_value(safety_params,[safe_y_radius,safe_x_radius])
 
     #Optimisation
     #Minimise trajectory duration for planning car
@@ -103,28 +103,33 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     init_lane_dist1 = 0*vertcat(init_dx_lane1,init_dy_lane1,init_dv_lane1,init_dtheta_lane1)
 
     dest_lane1 = opti.parameter(3,1)
-    dest_dx_lane1 = sumsqr(dest_lane1[0]-x1[0,:])
-    dest_dy_lane1 = sumsqr(dest_lane1[1]-x1[1,:])
+    #dest_dx_lane1 = sumsqr(fmax(dest_lane1[0]-x1[0,:],0))
+    #dest_dy_lane1 = sumsqr(fmax(dest_lane1[1]-x1[1,:],0))
+    dest_dx_lane1 = sumsqr(cos(dest_lane1[2])*fmax(dest_lane1[0]-x1[0,-1],0)+\
+                           sin(dest_lane1[2])*(dest_lane1[0]-x1[0,:]))
+    dest_dy_lane1 = sumsqr(sin(dest_lane1[2])*fmax(dest_lane1[1]-x1[1,-1],0)+\
+                           cos(dest_lane1[2])*(dest_lane1[1]-x1[1,:]))
     dest_dv_lane1 = sumsqr(speed_limit-x1[2,:])
     dest_dtheta_lane1 = sumsqr(dest_lane1[2]-x1[3,:])
-    dest_lane_dist1 = 0*vertcat(dest_dx_lane1,dest_dy_lane1,dest_dv_lane1,dest_dtheta_lane1)
+    dest_lane_dist1 = 1*vertcat(dest_dx_lane1,dest_dy_lane1,dest_dv_lane1,dest_dtheta_lane1)
 
     c1_traj_duration_weight = opti.parameter(4,1) 
-    opti.set_value(c1_traj_duration_weight,[10,10,0,10])
-    c1_min_traj_duration = sum1((init_lane_dist1+dest_lane_dist1)*c1_traj_duration_weight)
+    opti.set_value(c1_traj_duration_weight,[1,1,1,10])
+    c1_min_traj_duration = sum1(dest_lane_dist1*c1_traj_duration_weight)
+    #c1_min_traj_duration = sum1((init_lane_dist1+dest_lane_dist1)*c1_traj_duration_weight)
     #Minimise Acceleration Magnitude
-    c1_action_weight = opti.parameter(2,1)
-    opti.set_value(c1_action_weight,[0,0])
-    c1_min_accel = sumsqr(u1*c1_action_weight)
+    #c1_action_weight = opti.parameter(2,1)
+    #opti.set_value(c1_action_weight,[0,0])
+    #c1_min_accel = sumsqr(u1*c1_action_weight)
     #Minimise Jerk
-    c1_jerk_weight = opti.parameter(2,1)
-    opti.set_value(c1_jerk_weight,[0,0])
-    c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
+    #c1_jerk_weight = opti.parameter(2,1)
+    #opti.set_value(c1_jerk_weight,[0,0])
+    #c1_min_jerk = sumsqr((u1[:,1:]-u1[:,:-1])*c1_jerk_weight)
 
     #If the car has a leader, motivate it to get behind the other car
-    centre_dx_lane1 = sumsqr(cos(init_lane1[2])*fmax(x2[0,:]-x1[0,:],0))
-    centre_dy_lane1 = sumsqr(sin(init_lane1[2])*fmax(x2[1,:]-x1[1,:],0))
-    c1_lead_weight = 1*is_lead1
+    centre_dx_lane1 = sumsqr(cos(dest_lane1[2])*fmax(x2[0,:]-x1[0,:],0))
+    centre_dy_lane1 = sumsqr(sin(dest_lane1[2])*fmax(x2[1,:]-x1[1,:],0))
+    c1_lead_weight = 500*is_lead1
     c1_behind_mid = sum2(centre_dx_lane1+centre_dy_lane1)*c1_lead_weight
 
     #Minimise trajectory duration for other car
@@ -136,50 +141,76 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     init_lane_dist2 = 0*vertcat(init_dx_lane2,init_dy_lane2,init_dv_lane2,init_dtheta_lane2)
 
     dest_lane2 = opti.parameter(3,1)
-    dest_dx_lane2 = sumsqr(dest_lane2[0]-x2[0,:])
-    dest_dy_lane2 = sumsqr(dest_lane2[1]-x2[1,:])
+    #dest_dx_lane2 = sumsqr(fmax(dest_lane2[0]-x2[0,:],0))
+    #dest_dy_lane2 = sumsqr(fmax(dest_lane2[1]-x2[0,:],0))
+    dest_dx_lane2 = sumsqr(cos(dest_lane2[2])*fmax(dest_lane2[0]-x2[0,-1],0)+\
+                           sin(dest_lane2[2])*(dest_lane2[0]-x2[0,:]))
+    dest_dy_lane2 = sumsqr(sin(dest_lane2[2])*fmax(dest_lane2[1]-x2[1,-1],0)+\
+                           cos(dest_lane2[2])*(dest_lane2[1]-x2[1,:]))
     dest_dv_lane2 = sumsqr(speed_limit-x2[2,:])
     dest_dtheta_lane2 = sumsqr(dest_lane2[2]-x2[3,:])
-    dest_lane_dist2 = 0*vertcat(dest_dx_lane2,dest_dy_lane2,dest_dv_lane2,dest_dtheta_lane2)
+    dest_lane_dist2 = 1*vertcat(dest_dx_lane2,dest_dy_lane2,dest_dv_lane2,dest_dtheta_lane2)
 
     c2_traj_duration_weight = opti.parameter(4,1) 
-    opti.set_value(c2_traj_duration_weight,[10,10,0,10])
-    c2_min_traj_duration = sum1((init_lane_dist2+dest_lane_dist2)*c2_traj_duration_weight)
+    opti.set_value(c2_traj_duration_weight,[1,1,1,10])
+    c2_min_traj_duration = sum1(dest_lane_dist2*c2_traj_duration_weight)
+    #c2_min_traj_duration = sum1((init_lane_dist2+dest_lane_dist2)*c2_traj_duration_weight)
     #Minimise Acceleration Magnitude
-    c2_action_weight = opti.parameter(2,1)
-    opti.set_value(c2_action_weight,[0,0]) #[5,100]
-    c2_min_accel = sumsqr(u2*c2_action_weight)
+    #c2_action_weight = opti.parameter(2,1)
+    #opti.set_value(c2_action_weight,[0,0]) #[5,100]
+    #c2_min_accel = sumsqr(u2*c2_action_weight)
     #Minimise Jerk
-    c2_jerk_weight = opti.parameter(2,1)
-    opti.set_value(c2_jerk_weight,[0,0])
-    c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
+    #c2_jerk_weight = opti.parameter(2,1)
+    #opti.set_value(c2_jerk_weight,[0,0])
+    #c2_min_jerk = sumsqr((u2[:,1:]-u2[:,:-1])*c2_jerk_weight)
 
     #If the car has a leader, motivate it to get behind the other car
-    centre_dx_lane2 = sumsqr(cos(init_lane2[2])*fmax(x1[0,:]-x2[0,:],0))
-    centre_dy_lane2 = sumsqr(sin(init_lane2[2])*fmax(x1[1,:]-x2[1,:],0))
-    c2_lead_weight = 1*is_lead2
+    centre_dx_lane2 = sumsqr(cos(dest_lane2[2])*fmax(x1[0,:]-x2[0,:],0))
+    centre_dy_lane2 = sumsqr(sin(dest_lane2[2])*fmax(x1[1,:]-x2[1,:],0))
+    c2_lead_weight = 500*is_lead2
     c2_behind_mid = sum2(centre_dx_lane2+centre_dy_lane2)*c2_lead_weight
 
     #Encourage cars to stay maximise distance between each other
     safety_weight = 0
-    safety = safety_weight*sumsqr(1-(((x1[0,:]-x2[0,:])/safety_params[0])**2 + \
-                          ((x1[1,:]-x2[1,:])/safety_params[1])**2))
+    safety = safety_weight*sumsqr(1-(((x1[0,:]-x2[0,:])/safety_params[1])**2 + \
+                          ((x1[1,:]-x2[1,:])/safety_params[0])**2))
 
-    opti.minimize(c1_min_traj_duration+c1_min_accel+c1_min_jerk+c1_behind_mid+\
-                  c2_min_traj_duration+c2_min_accel+c2_min_jerk+c2_behind_mid+\
-                   safety)
+    ######################################################
+    #Debugging
+    #c1_min_traj_duration=0
+    #c1_min_accel = 0
+    #c1_min_jerk = 0
+    #c1_behind_mid = 0
+    #c2_min_traj_duration=0
+    #c2_min_accel = 0
+    #c2_min_jerk = 0
+    #c2_behind_mid = 0
+    #safety = 0
+    #######################################################
+
+    opti.minimize(c1_min_traj_duration+c1_behind_mid+\
+                  c2_min_traj_duration+c2_behind_mid+\
+                  safety)
 
     for k in range(N):
         opti.subject_to(x1[:,k+1]==F(x1[:,k],u1[:,k]))
         opti.subject_to(x2[:,k+1]==F(x2[:,k],u2[:,k]))
     
-    safety_constr = (((x1[0,:]-x2[0,:])/safety_params[0])**2 + ((x1[1,:]-x2[1,:])/safety_params[1])**2)
+    safety_constr = (((x1[0,:]-x2[0,:])/safety_params[1])**2 + ((x1[1,:]-x2[1,:])/safety_params[0])**2)
     opti.subject_to(safety_constr>=1)
     
-        
+    #re_crash_1 = ((cos(x1[3,:])*(x2[0,:]-x1[0,:]) + sin(x1[3,:])*(x2[1,:]-x1[1,:]))**2)/(safety_params[0])**2 + ((sin(x1[3,:])*(x2[0,:]-x1[0,:]) - cos(x1[3,:])*(x2[1,:]-x1[1,:]))**2)/(safety_params[1])**2
+    #re_crash_2 = ((cos(x2[3,:])*(x1[0,:]-x2[0,:]) + sin(x2[3,:])*(x1[1,:]-x2[1,:]))**2)/(safety_params[0])**2 + ((sin(x2[3,:])*(x1[0,:]-x2[0,:]) - cos(x2[3,:])*(x1[1,:]-x2[1,:]))**2)/(safety_params[1])**2
+    
+    #opti.subject_to(re_crash_1>=1)
+    #opti.subject_to(re_crash_2>=1)
+    
     #Velocity Contraints
     opti.subject_to(bnd[0]<=x1[2,:])
     opti.subject_to(x1[2,:]<=bnd[1])
+    #Heading Constraints
+    opti.subject_to(dest_lane1[2]-math.pi/180<=x1[3,:])
+    opti.subject_to(x1[3,:]<=dest_lane1[2]+math.pi/180)
     #Accel Constraints
     opti.subject_to(bnd[2]<=u1[0,:])
     opti.subject_to(u1[0,:]<=bnd[3])
@@ -188,10 +219,14 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     opti.subject_to(u1[1,:]<=bnd[5])
     #Initial position contraints
     opti.subject_to(x1[:,0]==init_state1) #Initial state
+    opti.subject_to(u1[1,:]==0) #NOTE: Cars can't turn
 
     #Velocity Contraints
     opti.subject_to(bnd[0]<=x2[2,:])
     opti.subject_to(x2[2,:]<=bnd[1])
+    #Heading Constraints
+    opti.subject_to(dest_lane2[2]-math.pi/180<=x2[3,:])
+    opti.subject_to(x2[3,:]<=dest_lane2[2]+math.pi/180)
     #Accel Constraints
     opti.subject_to(bnd[2]<=u2[0,:])
     opti.subject_to(u2[0,:]<=bnd[3])
@@ -200,6 +235,7 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     opti.subject_to(u2[1,:]<=bnd[5])
     #Initial position contraints
     opti.subject_to(x2[:,0]==init_state2) #Initial state
+    opti.subject_to(u2[1,:]==0) #NOTE: Cars can't turn
 
     ###########################################################
     ########### Define Optimizer ##############################
@@ -210,7 +246,7 @@ def makeJointIntersectionOptimiser(dt,horizon,veh_width,veh_length,lane_width,sp
     ipopt_opts["ipopt.sb"] = "yes";
     ipopt_opts["print_time"] = 0
     #Cap the maximum number of iterations
-    ipopt_opts["ipopt.max_iter"] = 500
+    ipopt_opts["ipopt.max_iter"] = 1500
 
     opti.solver('ipopt',ipopt_opts)
     
@@ -295,6 +331,18 @@ def dynamicIntersectionPlotter(mpc_x1,mpc_x2,mdpt,lane_width):
 def computeDistance(x,lane):
     #distance from desired x-position and heading
     return math.sqrt((x[0]-lane[0])**2 + (x[1]-lane[1])**2 + (x[3]-lane[2])**2)
+
+def finCheck(x,lane,lane_width):
+    #Check point has passed objective
+    obj_val = math.cos(lane[2])*(lane[0]-x[0]) + math.sin(lane[2])*(lane[1]-x[1])
+    obj_satisfied = obj_val<0
+    #Check on the lane
+    lane_val = math.cos(lane[2])*abs(lane[1]-x[1]) + math.sin(lane[2])*abs(lane[0]-x[0])
+    lane_satisfied = lane_val<lane_width/2
+    #Check with the right heading
+    heading_val = abs(lane[2]-x[3])
+    heading_satisfied = heading_val<math.pi/90 # 2 degree tolerance
+    return obj_satisfied and lane_satisfied and heading_satisfied
 ###################################################################################################
 
 
@@ -321,13 +369,13 @@ if __name__ == "__main__":
     ###################################
     #Defining initial states for both cars
     delta = 2
-    init_c1_posit = [veh_length+delta+lane_width/2,.5*veh_length] # middle of right lane
+    init_c1_posit = [veh_length+delta+lane_width/2,.5*veh_length-1.15] # middle of right lane
     init_c1_vel = 0
     init_c1_heading = math.pi/2 
     init_c1_accel = 0
     init_c1_yaw_rate = 0
 
-    init_c2_posit = [.5*veh_length,veh_length+1*lane_width+lane_width/2+delta] # middle of right lane
+    init_c2_posit = [.5*veh_length-4.6,veh_length+delta+1.5*lane_width] # middle of right lane
     init_c2_vel = 0
     init_c2_heading = 0
     init_c2_accel = 0
@@ -339,16 +387,16 @@ if __name__ == "__main__":
     c2_lead = [1,0]
 
     #Definition of endpoints of lanes leading into the intersection
-    in_lanes = [[veh_length+delta+1.5*lane_width,veh_length+delta+1.5*lane_width,3*math.pi/2],\
-                [veh_length+delta+1.5*lane_width,veh_length+delta+lane_width/2,math.pi],\
-                [veh_length+delta+lane_width/2,veh_length+delta+lane_width/2,math.pi/2],\
-                [veh_length+delta+lane_width/2,veh_length+delta+1.5*lane_width,0]]
+    in_lanes = [[veh_length+delta+1.5*lane_width,veh_length+delta+1*lane_width,3*math.pi/2],\
+                [veh_length+delta+1*lane_width,veh_length+delta+lane_width/2,math.pi],\
+                [veh_length+delta+lane_width/2,veh_length+delta+lane_width,math.pi/2],\
+                [veh_length+delta+lane_width,veh_length+delta+1.5*lane_width,0]]
 
     #Definition of endpoints of lanes leading out of intersection
     out_lanes =[[veh_length+delta+.5*lane_width,veh_length+delta+2*lane_width+veh_length,math.pi/2],\
                 [veh_length+delta+2*lane_width+veh_length,veh_length+delta+1.5*lane_width,0],\
                 [veh_length+delta+1.5*lane_width,0,3*math.pi/2],\
-                [0,veh_length+delta+1.5*lane_width,math.pi]]
+                [0,veh_length+delta+0.5*lane_width,math.pi]]
 
     c1_init_lane,c2_init_lane = in_lanes[2],in_lanes[3]
     c1_dest_lane,c2_dest_lane = out_lanes[0],out_lanes[1]
@@ -363,7 +411,7 @@ if __name__ == "__main__":
     reward_grid = np.array([[[-1.0,-1.0],[1.0,0.0]],[[0.0,1.0],[-1.0,-1.0]]])
 
     a1 = .1
-    a2 = .9
+    a2 = .1
 
     #goal_grid = makeBaselineRewardGrid(reward_grid,a1,a2)
     goal_grid = makeVanillaAltRewardGrid(reward_grid,a1,a2)
@@ -423,9 +471,22 @@ if __name__ == "__main__":
     c1_c2_is_lead = c1_lead[c1_c2_index] #if c1 thinks c2 will give way
     c2_c1_is_lead = c2_lead[c2_c1_index] #if c2 thinks c1 will give way
     c2_c2_is_lead = c2_lead[c2_index] #if c2 thinks they are expected to continue
+
+    #c2_c2_joint_opt_x,c2_c2_joint_opt_u,c2_c1_joint_opt_x,c2_c1_joint_opt_u =\
+    #          optimiser(c2_init,c2_init_lane,c2_dest_lane,c2_c2_is_lead,c1_init,c1_init_lane,\
+    #          c1_dest_lane,c2_c1_is_lead)
+    #c1_c1_joint_opt_x,c1_c1_joint_opt_u,c1_c2_joint_opt_x,c1_c2_joint_opt_u =\
+    #          optimiser(c1_init,c1_init_lane,c1_dest_lane,c1_c1_is_lead,c2_init,c2_init_lane,\
+    #          c2_dest_lane,c1_c2_is_lead)
+    #pdb.set_trace()
     t = 0
     c1_t,c2_t = None,None #time at which each car completed their true objective
     num_timesteps = 2 # How many timesteps are followed per iteration
+     
+    print("T is: {}\tD1: {}\t D2: {}".format(t,computeDistance(c1_x,c1_dest_lane),computeDistance(c2_x,c2_dest_lane)))
+ 
+    prev_d1 = computeDistance(c1_x,c1_dest_lane)
+    prev_d2 = computeDistance(c2_x,c2_dest_lane)
 
     while t<T and (c1_t is None or c2_t is None):
         ###########################################
@@ -437,8 +498,7 @@ if __name__ == "__main__":
         #### MPC for C2 ############################
         c2_opt_x,c2_opt_u,c2_c1_opt_x,c2_c1_opt_u = optimiser(c2_x,c2_init_lane,c2_dest_lane,\
                                  c2_c2_is_lead,c1_x,c1_init_lane,c1_dest_lane,c2_c1_is_lead)
-      
-        #pdb.set_trace()
+     
         #############################################
         #Debugging
         #if True in [round(x,2)<round(c1_x.tolist()[1][0],2) for x in np.array(c1_opt_x[1,:num_timesteps-1]).tolist()[0]]:
@@ -501,6 +561,11 @@ if __name__ == "__main__":
                 pdb.set_trace()
             ##############################################
 
+            re_crash_1 = ((math.cos(c1_x[3])*(c2_x[0]-c1_x[0]) + math.sin(c1_x[3])*(c2_x[1]-c1_x[1]))**2)/(veh_length/2)**2 + ((math.sin(c1_x[3])*(c2_x[0]-c1_x[0]) - math.cos(c1_x[3])*(c2_x[1]-c1_x[1]))**2)/(veh_width/2)**2
+            re_crash_2 = ((math.cos(c2_x[3])*(c1_x[0]-c2_x[0]) + math.sin(c2_x[3])*(c1_x[1]-c2_x[1]))**2)/(veh_length/2)**2 + ((math.sin(c2_x[3])*(c1_x[0]-c2_x[0]) - math.cos(c2_x[3])*(c1_x[1]-c2_x[1]))**2)/(veh_width/2)**2
+
+            print("Alt_crash 1: {}\t Alt_Crash 2: {}".format(re_crash_1,re_crash_2))
+
             ##############################################
             #Store MPC generated trajectories
             c1_mpc_u = np.hstack((c1_mpc_u,np.array(u1)))
@@ -513,23 +578,29 @@ if __name__ == "__main__":
 
         ################################################
         #If C1 satisfies their current objective
-        c1_check_val = math.cos(c1_dest_lane[2])*(c1_dest_lane[0]-c1_x[0]) + \
-                           math.sin(c1_dest_lane[2])*(c1_dest_lane[1]-c1_x[1])
-        if c1_t is None and c1_check_val<0:
+        #c1_check_val = math.cos(c1_dest_lane[2])*(c1_dest_lane[0]-c1_x[0]) + \
+        #                   math.sin(c1_dest_lane[2])*(c1_dest_lane[1]-c1_x[1])
+        c1_fin = finCheck(c1_x,c1_dest_lane,lane_width)
+        #if c1_t is None and c1_check_val<0 and computeDistance(c1_x,c1_dest_lane)<5:
+        if c1_t is None and c1_fin:
             c1_t = t #Time C1 satisfied trajectory
             print("C1_T set: {}".format(c1_t))
         #C1 has drifted from their objective, reset value
-        elif c1_t is not None and c1_check_val>0: c1_t = None
+        #elif c1_t is not None and c1_check_val>0: c1_t = None
+        elif c1_t is not None and not c1_fin: c1_t = None
 
         ###############################################
         #If C2 satisfies their current objective
-        c2_check_val = math.cos(c2_dest_lane[2])*(c2_dest_lane[0]-c2_x[0]) + \
-                           math.sin(c2_dest_lane[2])*(c2_dest_lane[1]-c2_x[1])
-        if c2_t is None and c2_check_val<0:
+        #c2_check_val = math.cos(c2_dest_lane[2])*(c2_dest_lane[0]-c2_x[0]) + \
+        #                   math.sin(c2_dest_lane[2])*(c2_dest_lane[1]-c2_x[1])
+        c2_fin = finCheck(c2_x,c2_dest_lane,lane_width)
+        #if c2_t is None and c2_check_val<0 and computeDistance(c2_x,c2_dest_lane)<5:
+        if c2_t is None and c2_fin:
             c2_t = t
             print("C2_T set: {}".format(c2_t))
         #C2 has drifted from their objective, reset value.
-        elif c2_t is not None and c2_check_val>0: c2_t = None
+        #elif c2_t is not None and c2_check_val>0: c2_t = None
+        elif c2_t is not None and not c2_fin: c2_t = None
 
         if computeDistance(c1_x,c1_dest_lane)<computeDistance(c1_x,c1_init_lane):
             print("Changing C1_lane_init")
@@ -537,7 +608,17 @@ if __name__ == "__main__":
         if computeDistance(c2_x,c2_dest_lane)<computeDistance(c2_x,c2_init_lane):
             print("Changing C2_lane_init")
             c2_init_lane = c2_dest_lane # c2 has left starting lane, shouldn't be pulled back
+
+        #if c1_t is None and prev_d1<computeDistance(c1_x,c1_dest_lane):
+        #    print("Break for C1")
+        #    pdb.set_trace()
+        #if c2_t is None and prev_d2<computeDistance(c2_x,c2_dest_lane):
+        #    print("Break for C2")
+        #    pdb.set_trace()
         
+        prev_d1 = computeDistance(c1_x,c1_dest_lane)
+        prev_d2 = computeDistance(c2_x,c2_dest_lane)
+
         print("T is: {}\tD1: {}\t D2: {}".format(t,computeDistance(c1_x,c1_dest_lane),computeDistance(c2_x,c2_dest_lane)))
 
 

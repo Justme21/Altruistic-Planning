@@ -195,7 +195,7 @@ def makeJointIDMOptimiser(dt,horizon,veh_width,veh_length,lane_width,speed_limit
     #Velocity Contraints
     opti.subject_to(bnd[2]<=x1[2,:])
     opti.subject_to(x1[2,:]<=bnd[3])
-#Heading Constraints
+    #Heading Constraints
     opti.subject_to(bnd[4]<=x1[3,:])
     opti.subject_to(x1[3,:]<=bnd[5])
     #Accel Constraints
