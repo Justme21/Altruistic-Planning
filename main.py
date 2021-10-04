@@ -1,7 +1,9 @@
+import math
 import numpy as np
 import sys
 
 sys.path.insert(0,'../Driving-Simulator')
+sys.path.insert(0,'../driving_simulator')
 import simulator
 from vehicle_classes import Car
 
@@ -59,6 +61,20 @@ def trajCost(traj,T,w):
     return (1/T)*(c_sigma+c_delta)
 
 ######################################################################################################
+#State stuff
+def getParametrisedAcceleration(vel,heading,accel,yaw_rate,axle_length):
+    x_dot = vel*math.cos(math.radians(heading))
+    y_dot = vel*math.sin(math.radians(heading))
+    try:
+        x_dot_dot = (vel*accel/x_dot) - (y_dot/x_dot)*(1/vel)*(y_dot*accel - (x_dot*(vel**2)*math.tan(math.radians(yaw_rate))/axle_length))
+    except ZeroDivisionError:
+        x_dot_dot = 0
+    try:
+        y_dot_dot = (1/vel)*(y_dot*accel - (x_dot*(vel**2)*math.tan(math.radians(yaw_rate))/axle_length))
+    except ZeroDivisionError:
+        y_dot_dot = 0
+
+    return (x_dot_dot,y_dot_dot)
 
 ######################################################################################################
 def checkForCrash(traj1,traj2,dt,safety_params):
@@ -91,11 +107,11 @@ def computeCost(traj1,traj2,traj1_cost_function,traj2_cost_function,traj1_alt,tr
 
 
 def computeCost2(label1,label2,traj1_cost_function,traj2_cost_function,traj1_alt,traj2_alt,dt,safety_params):
-    if label1 is "Stop":
-        if label2 is "Accelerate": r1,r2 = 10,0
+    if label1 == "Stop":
+        if label2 == "Accelerate": r1,r2 = 10,0
         else: r1,r2 = 100,10
     else:
-        if label2 is "Accelerate": r1,r2 = np.inf,np.inf
+        if label2 == "Accelerate": r1,r2 = np.inf,np.inf
         else: r1,r2 = 0,10
 
     return (1-traj1_alt)*r1 + traj1_alt*r2,traj2_alt*r1 + (1-traj2_alt)*r2
@@ -219,20 +235,26 @@ if __name__ == "__main__":
     ego_labels = ["Stop","Lane Change"]
     other_labels = ["Accelerate","Give Way"]
     ego_init_state = dict(ego.state)
+    ego_init_state["parametrised_acceleration"] = getParametrisedAcceleration(ego_init_state["velocity"],ego_init_state["heading"],ego_init_state["acceleration"],ego_init_state["yaw_rate"],axle_length=ego.length)
     dest_state = dict(ego_init_state)
     dest_state["velocity"] =0
+    dest_state["parametrised_acceleration"] = getParametrisedAcceleration(dest_state["velocity"],dest_state["heading"],dest_state["acceleration"],dest_state["yaw_rate"],axle_length=ego.length)
     trajectories[ego].append(Trajectory(ego_init_state,dest_state,T))
     dest_state = dict(ego_init_state)
     dest_state["position"] = tuple([dest_state["position"][0]+lane_width,dest_state["position"][1]])
+    dest_state["parametrised_acceleration"] = getParametrisedAcceleration(dest_state["velocity"],dest_state["heading"],dest_state["acceleration"],dest_state["yaw_rate"],axle_length=ego.length)
     trajectories[ego].append(Trajectory(ego_init_state,dest_state,T))
 
     trajectories[other] = []
     other_init_state = dict(other.state)
+    other_init_state["parametrised_acceleration"] = getParametrisedAcceleration(other_init_state["velocity"],other_init_state["heading"],other_init_state["acceleration"],other_init_state["yaw_rate"],axle_length=other.length)
     dest_state = dict(other_init_state)
     dest_state["velocity"] += 10
+    dest_state["parametrised_acceleration"] = getParametrisedAcceleration(dest_state["velocity"],dest_state["heading"],dest_state["acceleration"],dest_state["yaw_rate"],axle_length=other.length)
     trajectories[other].append(Trajectory(other_init_state,dest_state,T))
     dest_state = dict(other_init_state)
     dest_state["velocity"] -= 10
+    dest_state["parametrised_acceleration"] = getParametrisedAcceleration(dest_state["velocity"],dest_state["heading"],dest_state["acceleration"],dest_state["yaw_rate"],axle_length=other.length)
     trajectories[other].append(Trajectory(other_init_state,dest_state,T))
 
     ###################################

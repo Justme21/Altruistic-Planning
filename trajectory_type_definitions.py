@@ -21,7 +21,7 @@ class Line():
 
 
 class Trajectory():
-    def __init__(self,init_state,dest_state,time_len,label):
+    def __init__(self,init_state,dest_state,time_len,label=None):
         if init_state is None or dest_state is None:
             print("Error, default values for states are invalid")
             exit(-1)
