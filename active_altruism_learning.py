@@ -553,16 +553,16 @@ if __name__ == '__main__':
  
     ##### Defining the reward matrix ################
     #Values used in Active Learning Experiment
-    #r_values = [[3,-5],[-1,1],[-1,2]]
-    #c_values = [[0,7],[2,1],[2,2]]
+    r_values = [[3,-5],[-1,1],[-1,2]]
+    c_values = [[0,7],[2,1],[2,2]]
 
     #Values used in Information Sufficiency experiment
     #r_values = [[5,-2],[1,0]]
     #c_values = [[-4,1],[-4,1]]
 
     #Testing Reward Matrix Values
-    r_values = [[3,-10],[0,1],[2,-1]]
-    c_values = [[-2,3],[-2,3],[0,3]]
+    #r_values = [[3,-10],[0,1],[2,-1]]
+    #c_values = [[-2,3],[-2,3],[0,3]]
 
     reward_matrix = []
     for r,c in zip(r_values,c_values):
@@ -594,6 +594,12 @@ if __name__ == '__main__':
     actions_info_expected_value = rewardMatrixExpectedValues(augmented_reward_matrix_alt,preferred_actions,r_alpha,c_alpha_distr)
 
     ###############################################
+    #Setting Font Size for Plots
+    #import matplotlib
+    #font = {'family' : 'normal',
+    #        'size'   : 25}
+    #matplotlib.rc('font', **font)
+    ###############################################
     #Plotting the expected values
     #plot_vals = actions_expected_value
     #import matplotlib.pyplot as plt
@@ -607,7 +613,7 @@ if __name__ == '__main__':
     #plt.title("Action Expected Reward")
     #plt.xlabel("Action")
     #plt.ylabel("Expected Reward")
-
+    #
     #plt.show()
     ##############################################
     #Plotting the relative expectde values
@@ -635,6 +641,8 @@ if __name__ == '__main__':
     #plt.legend()
 
     #plt.show()
+    import pdb
+    pdb.set_trace()
     ##############################################
     #MPC Parameters
     cost_scale_coef = 1
