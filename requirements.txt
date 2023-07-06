@@ -1,6 +1,6 @@
 matplotlib==3.3.4
 Theano==1.0.5
-scipy==1.6.0
+scipy==1.10.0
 numpy==1.21.0
 casadi==3.5.5.post2
 simulator==1.0.3
